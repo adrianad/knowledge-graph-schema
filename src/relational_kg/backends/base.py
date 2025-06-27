@@ -22,12 +22,17 @@ class GraphBackend(ABC):
         pass
     
     @abstractmethod
+    def find_importance_based_clusters(self, min_cluster_size: int = 4, max_hops: int = 2, top_tables_pct: float = 0.2) -> List[Set[str]]:
+        """Find clusters based on most important tables as cores."""
+        pass
+    
+    @abstractmethod
     def get_table_importance(self) -> Dict[str, float]:
         """Get importance scores for all tables."""
         pass
     
     @abstractmethod
-    def find_shortest_path(self, source: str, target: str) -> Optional[List[str]]:
+    def find_shortest_path(self, source: str, target: str, max_hops: Optional[int] = None) -> Optional[List[str]]:
         """Find shortest path between two tables."""
         pass
     

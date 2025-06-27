@@ -5,11 +5,16 @@ A Python application that extracts database schemas and creates knowledge graphs
 ## Features
 
 - **Schema Extraction**: Connects to SQLite, PostgreSQL, and MySQL databases
-- **Knowledge Graph**: Creates NetworkX-based graphs showing table relationships
-- **Smart Analysis**: Finds relevant tables based on keywords and query intent
+- **Dual Backend Support**: NetworkX for development, Neo4j for production scale
+- **Knowledge Graph**: Creates sophisticated graphs with table importance scoring
+- **Advanced Clustering**: 
+  - Community detection using Louvain algorithm
+  - Importance-based clustering around hub tables
+  - Overlapping clusters for realistic business modeling
+- **LLM Integration**: Automatic cluster naming, keyword extraction, and semantic analysis
+- **Smart Analysis**: Finds relevant tables based on keywords and natural language queries
 - **Visualization**: Interactive Plotly graphs and static matplotlib plots
-- **Community Detection**: Identifies clusters of related tables
-- **CLI Interface**: Easy-to-use command line tools
+- **CLI Interface**: Comprehensive command line tools for all operations
 
 ## Installation
 
@@ -35,7 +40,12 @@ rkg analyze -c "sqlite:///your_database.db"
 rkg find-tables -c "sqlite:///your_database.db" -k "user,order,product"
 ```
 
-3. **Visualize the schema graph:**
+3. **Create intelligent table clusters:**
+```bash
+rkg create-clusters -c "sqlite:///your_database.db" --method importance
+```
+
+4. **Visualize the schema graph:**
 ```bash
 rkg visualize -c "sqlite:///your_database.db" -o schema_graph.html
 ```
@@ -75,6 +85,32 @@ rkg visualize -c "sqlite:///shop.db" -o interactive_graph.html
 rkg visualize -c "sqlite:///shop.db" -l hierarchical
 ```
 
+### Advanced Clustering
+```bash
+# Create clusters using community detection
+rkg create-clusters -c "sqlite:///shop.db" --method community
+
+# Create importance-based clusters with custom parameters
+rkg create-clusters -c "sqlite:///shop.db" --method importance \
+  --min-size 3 --max-hops 2 --top-pct 0.25
+
+# Requires Neo4j backend for storage
+rkg create-clusters -c "sqlite:///shop.db" --backend neo4j
+```
+
+### LLM-Powered Analysis
+```bash
+# Extract business keywords using LLM
+rkg llm-keyword-extraction -c "sqlite:///shop.db"
+
+# Semantic table search with natural language
+rkg find-tables-semantic -c "sqlite:///shop.db" \
+  -q "tables related to customer orders and payments"
+
+# Explore table relationships
+rkg explore-table -c "sqlite:///shop.db" -t "orders" --hops 3
+```
+
 ### Schema Summary
 ```bash
 # Get comprehensive schema statistics
@@ -100,22 +136,52 @@ mysql+pymysql://username:password@host:port/database
 
 ## Environment Variables
 
-Create a `.env` file based on `.env.example`:
+Create a `.env` file for configuration:
 
 ```bash
-cp .env.example .env
-# Edit .env with your database connection details
+# Database connection (optional - can use -c flag instead)
+DATABASE_URL=sqlite:///your_database.db
+
+# Neo4j configuration (for advanced features)
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=your_password
+
+# LLM configuration (for semantic analysis)
+OPENAI_API_BASE=http://localhost:8000/v1  # Local LLM server
+OPENAI_API_KEY=dummy-key
+LLM_MODEL=qwen
+LLM_MAX_CONCURRENT=5
 ```
 
 ## Architecture
 
-The application is built with a modular architecture supporting future Neo4j integration:
+The application is built with a modular, extensible architecture:
 
-- **DatabaseExtractor**: Handles schema extraction from various databases
-- **SchemaGraph**: Creates and manages NetworkX knowledge graphs
-- **SchemaAnalyzer**: Provides intelligent table discovery and analysis
-- **GraphVisualizer**: Creates static and interactive visualizations
-- **CLI**: Command-line interface for all operations
+- **DatabaseExtractor**: Handles schema extraction from SQLite, PostgreSQL, MySQL
+- **Dual Backend System**:
+  - **NetworkXBackend**: Fast, in-memory graphs for development and smaller schemas
+  - **Neo4jBackend**: Persistent, scalable graphs for production and large schemas
+- **SchemaGraph**: Creates knowledge graphs with advanced relationship analysis
+- **SchemaAnalyzer**: Intelligent table discovery with importance scoring
+- **LLMClusterAnalyzer**: AI-powered cluster naming and keyword extraction
+- **GraphVisualizer**: Interactive and static visualizations
+- **CLI**: Comprehensive command-line interface
+
+## Clustering Algorithms
+
+### Community Detection
+- **Algorithm**: Louvain method for community detection
+- **Use Case**: Discover organic clusters based on relationship density
+- **Output**: Non-overlapping clusters of naturally related tables
+
+### Importance-Based Clustering
+- **Algorithm**: Hub-and-spoke clustering around high-importance tables  
+- **Importance Scoring**: PageRank (70%) + Degree Centrality (30%)
+- **Features**: 
+  - Overlapping clusters (tables can belong to multiple clusters)
+  - Configurable cluster size, relationship distance, and core selection
+  - Better representation of real business domains
 
 ## Use Cases
 
@@ -144,10 +210,19 @@ pytest
 black src/
 ```
 
-## Future Enhancements
+## Recent Enhancements
 
-- Neo4j backend support (architecture ready)
-- LLM integration for semantic table mapping
-- Advanced relationship scoring
-- Schema evolution tracking
-- Web API interface
+✅ **Neo4j Integration**: Full backend support for large-scale schemas  
+✅ **LLM Integration**: Automatic cluster analysis and keyword extraction  
+✅ **Advanced Clustering**: Importance-based clustering with overlapping support  
+✅ **Semantic Search**: Natural language table discovery  
+✅ **Enhanced CLI**: Comprehensive command set with flexible options  
+
+## Future Roadmap
+
+- Advanced relationship strength scoring based on data analysis
+- Schema evolution tracking and change detection  
+- Web API interface for programmatic access
+- Machine learning models for query-to-table mapping
+- Support for additional database types (Oracle, SQL Server)
+- Real-time schema monitoring and alerts

@@ -266,11 +266,6 @@ class DatabaseExtractor:
             for match in matches:
                 self._add_dependency_if_exists(match, available_tables, dependencies)
         
-        # Log what we found for debugging
-        if dependencies:
-            self.logger.info(f"Found dependencies for view: {dependencies}")
-        else:
-            self.logger.warning(f"No dependencies found in view definition: {view_definition[:200]}...")
         
         return dependencies
     

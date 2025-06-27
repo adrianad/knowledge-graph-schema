@@ -152,16 +152,101 @@ class SchemaGraph:
         return related
     
     def find_table_clusters(self) -> List[Set[str]]:
-        """Find communities/clusters of related tables."""
-        # Convert to undirected graph for community detection
-        undirected = self.graph.to_undirected()
+        """Find communities/clusters of related tables (tables only, excluding views)."""
+        # Create subgraph with only tables (not views)
+        table_nodes = [node for node, data in self.graph.nodes(data=True) 
+                      if not data.get('is_view', False)]
         
-        if len(undirected.nodes) == 0:
+        if len(table_nodes) == 0:
             return []
         
-        # Use Louvain method for community detection
-        communities = community.louvain_communities(undirected)
+        # Create subgraph with only table nodes and their relationships
+        table_subgraph = self.graph.subgraph(table_nodes).to_undirected()
+        
+        if len(table_subgraph.nodes) == 0:
+            return []
+        
+        # Use Louvain method for community detection on tables only
+        communities = community.louvain_communities(table_subgraph)
         return [set(c) for c in communities]
+    
+    def find_importance_based_clusters(self, min_cluster_size: int = 4, max_hops: int = 2, top_tables_pct: float = 0.2) -> List[Set[str]]:
+        """Create clusters based on most important tables as cores.
+        
+        Args:
+            min_cluster_size: Minimum number of tables per cluster
+            max_hops: Maximum relationship distance to include in cluster
+            top_tables_pct: Percentage of tables to consider as potential cores (0.0-1.0)
+        
+        Returns:
+            List of table clusters, each as a set of table names
+        """
+        # Get table importance scores
+        importance = self.get_table_importance()
+        
+        # Filter to tables only (exclude views)
+        table_importance = {
+            table: score for table, score in importance.items()
+            if not self.graph.nodes[table].get('is_view', False)
+        }
+        
+        if not table_importance:
+            return []
+        
+        # Find top important tables as cluster cores
+        sorted_tables = sorted(table_importance.items(), key=lambda x: x[1], reverse=True)
+        num_cores = max(1, int(len(sorted_tables) * top_tables_pct))
+        potential_cores = [table for table, _ in sorted_tables[:num_cores]]
+        
+        clusters = []
+        
+        for core_table in potential_cores:
+            # Build cluster around this core table
+            cluster = {core_table}
+            
+            # Find all tables within max_hops of the core
+            for hop in range(1, max_hops + 1):
+                hop_tables = set()
+                
+                # From current cluster members, find their neighbors
+                for cluster_member in list(cluster):
+                    # Get direct neighbors (both directions)
+                    neighbors = set()
+                    
+                    # Outgoing relationships
+                    try:
+                        successors = nx.single_source_shortest_path_length(
+                            self.graph, cluster_member, cutoff=hop
+                        )
+                        neighbors.update(successors.keys())
+                    except nx.NetworkXError:
+                        pass
+                    
+                    # Incoming relationships (reverse graph)
+                    try:
+                        reverse_graph = self.graph.reverse()
+                        predecessors = nx.single_source_shortest_path_length(
+                            reverse_graph, cluster_member, cutoff=hop
+                        )
+                        neighbors.update(predecessors.keys())
+                    except nx.NetworkXError:
+                        pass
+                    
+                    # Filter to tables only (allow overlap)
+                    table_neighbors = {
+                        table for table in neighbors 
+                        if not self.graph.nodes[table].get('is_view', False)
+                    }
+                    hop_tables.update(table_neighbors)
+                
+                # Add new tables found at this hop level
+                cluster.update(hop_tables)
+            
+            # Only keep clusters that meet minimum size
+            if len(cluster) >= min_cluster_size:
+                clusters.append(cluster)
+        
+        return clusters
     
     def get_table_importance(self) -> Dict[str, float]:
         """Calculate importance scores for tables based on centrality."""
@@ -183,6 +268,39 @@ class SchemaGraph:
             )
         
         return importance
+    
+    def get_table_and_view_importance(self) -> Dict[str, Dict[str, float]]:
+        """Calculate importance scores for tables and views separately."""
+        if len(self.graph.nodes) == 0:
+            return {'tables': {}, 'views': {}}
+        
+        # PageRank for importance
+        pagerank = nx.pagerank(self.graph)
+        
+        # Degree centrality
+        degree_centrality = nx.degree_centrality(self.graph)
+        
+        # Separate tables and views
+        tables = {}
+        views = {}
+        
+        for table in self.graph.nodes:
+            importance_score = (
+                pagerank.get(table, 0) * 0.7 + 
+                degree_centrality.get(table, 0) * 0.3
+            )
+            
+            # Check if it's a view from node data
+            node_data = self.graph.nodes[table]
+            if node_data.get('is_view', False):
+                views[table] = importance_score
+            else:
+                tables[table] = importance_score
+        
+        return {
+            'tables': tables,
+            'views': views
+        }
     
     def find_shortest_path(self, source: str, target: str) -> Optional[List[str]]:
         """Find shortest path between two tables."""

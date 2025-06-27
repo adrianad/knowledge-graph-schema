@@ -135,43 +135,122 @@ class Neo4jBackend(GraphBackend):
             return {record['table_name'] for record in result if record['table_name'] != table_name}
     
     def find_table_clusters(self) -> List[Set[str]]:
-        """Find clusters/communities of related tables and views."""
+        """Find clusters/communities of related tables (tables only, excluding views)."""
         with self.driver.session() as session:
-            # Simple clustering based on connected components
-            # Note: This is a basic implementation without GDS library
-            result = session.run("""
-                MATCH (t)
-                WHERE t.name IS NOT NULL
-                OPTIONAL MATCH path = (t)-[*]-(connected)
-                WHERE connected.name IS NOT NULL
-                WITH t, collect(DISTINCT connected.name) + [t.name] as component
-                RETURN DISTINCT component
+            # Get all edges between tables only (exclude views)
+            edges_result = session.run("""
+                MATCH (a)-[r]-(b)
+                WHERE a.name IS NOT NULL AND b.name IS NOT NULL
+                AND a.is_view = false AND b.is_view = false
+                RETURN DISTINCT a.name as source, b.name as target, 
+                       COALESCE(r.strength, 1.0) as weight
             """)
             
-            # Process results to create proper clusters
-            all_components = []
-            for record in result:
-                component = set(record['component'])
-                if component not in all_components:
-                    all_components.append(component)
+            # Get all isolated tables (no edges, and not views)
+            isolated_result = session.run("""
+                MATCH (t)
+                WHERE t.name IS NOT NULL AND t.is_view = false
+                AND NOT EXISTS((t)-[]-())
+                RETURN t.name as name
+            """)
             
-            # Merge overlapping components
-            merged = []
-            for component in all_components:
-                merged_with_existing = False
-                for i, existing in enumerate(merged):
-                    if component & existing:  # If there's any overlap
-                        merged[i] = existing | component
-                        merged_with_existing = True
-                        break
-                if not merged_with_existing:
-                    merged.append(component)
+            # Build NetworkX graph from Neo4j data
+            import networkx as nx
+            from networkx.algorithms import community
             
-            return merged
+            graph = nx.Graph()
+            
+            # Add edges between tables
+            for record in edges_result:
+                graph.add_edge(
+                    record['source'], 
+                    record['target'], 
+                    weight=record['weight']
+                )
+            
+            # Add isolated tables
+            for record in isolated_result:
+                graph.add_node(record['name'])
+            
+            if len(graph.nodes) == 0:
+                return []
+            
+            # Use Louvain method for community detection on tables only
+            communities = community.louvain_communities(graph)
+            return [set(c) for c in communities]
+    
+    def find_importance_based_clusters(self, min_cluster_size: int = 4, max_hops: int = 2, top_tables_pct: float = 0.2) -> List[Set[str]]:
+        """Find clusters based on most important tables as cores."""
+        
+        # Get table importance scores
+        importance = self.get_table_importance()
+        
+        # Filter to tables only (exclude views)
+        with self.driver.session() as session:
+            tables_result = session.run("""
+                MATCH (t)
+                WHERE t.name IS NOT NULL AND t.is_view = false
+                RETURN t.name as name
+            """)
+            table_names = {record['name'] for record in tables_result}
+        
+        table_importance = {
+            table: score for table, score in importance.items()
+            if table in table_names
+        }
+        
+        if not table_importance:
+            return []
+        
+        # Find top important tables as cluster cores
+        sorted_tables = sorted(table_importance.items(), key=lambda x: x[1], reverse=True)
+        num_cores = max(1, int(len(sorted_tables) * top_tables_pct))
+        potential_cores = [table for table, _ in sorted_tables[:num_cores]]
+        
+        clusters = []
+        
+        for core_table in potential_cores:
+            # Build cluster around this core table using Neo4j queries
+            cluster = {core_table}
+            
+            # Find all tables within max_hops of the core
+            with self.driver.session() as session:
+                cluster_result = session.run("""
+                    MATCH (start {name: $core_table})
+                    CALL {
+                        WITH start
+                        MATCH path = (start)-[*1..%d]-(connected)
+                        WHERE connected.name IS NOT NULL 
+                        AND connected.is_view = false
+                        AND connected.name <> $core_table
+                        RETURN DISTINCT connected.name as table_name
+                    }
+                    RETURN DISTINCT table_name
+                """ % max_hops, core_table=core_table)
+                
+                related_tables = {record['table_name'] for record in cluster_result}
+                cluster.update(related_tables)
+            
+            # Only keep clusters that meet minimum size
+            if len(cluster) >= min_cluster_size:
+                clusters.append(cluster)
+        
+        return clusters
     
     def get_table_importance(self) -> Dict[str, float]:
         """Get importance scores for all tables and views."""
         with self.driver.session() as session:
+            # First get total count of nodes
+            total_count_result = session.run("""
+                MATCH (t)
+                WHERE t.name IS NOT NULL
+                RETURN count(t) as total_count
+            """)
+            total_count = total_count_result.single()['total_count']
+            
+            if total_count == 0:
+                return {}
+            
             # Calculate importance based on degree centrality
             result = session.run("""
                 MATCH (t)
@@ -179,18 +258,65 @@ class Neo4jBackend(GraphBackend):
                 OPTIONAL MATCH (t)-[r]-()
                 WITH t, count(r) as degree
                 RETURN t.name as table_name, 
-                       toFloat(degree) / (SELECT count(*) FROM (MATCH (all) WHERE all.name IS NOT NULL RETURN all)) as importance
-            """)
+                       toFloat(degree) / $total_count as importance
+            """, total_count=total_count)
             
             return {record['table_name']: record['importance'] for record in result}
     
-    def find_shortest_path(self, source: str, target: str) -> Optional[List[str]]:
+    def get_table_and_view_importance(self) -> Dict[str, Dict[str, Any]]:
+        """Get importance scores for tables and views separately."""
+        with self.driver.session() as session:
+            # First get total count of nodes
+            total_count_result = session.run("""
+                MATCH (t)
+                WHERE t.name IS NOT NULL
+                RETURN count(t) as total_count
+            """)
+            total_count = total_count_result.single()['total_count']
+            
+            if total_count == 0:
+                return {'tables': {}, 'views': {}}
+            
+            # Get importance for tables
+            tables_result = session.run("""
+                MATCH (t)
+                WHERE t.name IS NOT NULL AND t.is_view = false
+                OPTIONAL MATCH (t)-[r]-()
+                WITH t, count(r) as degree
+                RETURN t.name as table_name, 
+                       toFloat(degree) / $total_count as importance
+                ORDER BY importance DESC
+            """, total_count=total_count)
+            
+            # Get importance for views (simplified to avoid hanging)
+            views_result = session.run("""
+                MATCH (v)
+                WHERE v.name IS NOT NULL AND v.is_view = true
+                OPTIONAL MATCH (v)-[r]-()
+                WITH v, count(r) as degree
+                RETURN v.name as table_name, 
+                       toFloat(degree) / $total_count as importance
+                ORDER BY importance DESC
+            """, total_count=total_count)
+            
+            tables = {record['table_name']: record['importance'] for record in tables_result}
+            views = {record['table_name']: record['importance'] for record in views_result}
+            
+            return {
+                'tables': tables,
+                'views': views
+            }
+    
+    def find_shortest_path(self, source: str, target: str, max_hops: Optional[int] = None) -> Optional[List[str]]:
         """Find shortest path between two tables/views."""
         with self.driver.session() as session:
-            result = session.run("""
-                MATCH (start {name: $source})
-                MATCH (end {name: $target})
-                MATCH path = shortestPath((start)-[*]-(end))
+            # Use reasonable default if no max_hops specified
+            hop_limit = max_hops if max_hops is not None else 10
+            
+            result = session.run(f"""
+                MATCH (start {{name: $source}})
+                MATCH (end {{name: $target}})
+                MATCH path = shortestPath((start)-[*..{hop_limit}]-(end))
                 RETURN [node in nodes(path) | node.name] as path
             """, source=source, target=target)
             
@@ -300,6 +426,84 @@ class Neo4jBackend(GraphBackend):
                 for record in result
             ]
     
+    def find_tables_and_views_by_keywords(self, search_keywords: List[str], 
+                                          max_tables: int = 5, max_views: int = 5) -> Dict[str, List[Dict[str, Any]]]:
+        """Find tables and views separately by matching keywords and business concepts."""
+        with self.driver.session() as session:
+            # Convert search keywords to lowercase for matching
+            search_keywords_lower = [kw.lower() for kw in search_keywords]
+            
+            # Get top tables (is_view = false)
+            tables_result = session.run("""
+                MATCH (t)
+                WHERE t.name IS NOT NULL AND t.is_view = false
+                WITH t,
+                     [kw IN t.keywords WHERE ANY(search_kw IN $search_keywords 
+                                                WHERE toLower(kw) CONTAINS toLower(search_kw))] as keyword_matches,
+                     [bc IN t.business_concepts WHERE ANY(search_kw IN $search_keywords 
+                                                         WHERE toLower(bc) CONTAINS toLower(search_kw))] as concept_matches
+                WHERE size(keyword_matches) > 0 OR size(concept_matches) > 0
+                RETURN t.name as table_name,
+                       t.is_view as is_view,
+                       keyword_matches,
+                       concept_matches,
+                       (size(keyword_matches) + size(concept_matches) * 2) as relevance_score
+                ORDER BY relevance_score DESC
+                LIMIT $max_tables
+            """, {
+                'search_keywords': search_keywords_lower,
+                'max_tables': max_tables
+            })
+            
+            # Get top views (is_view = true)
+            views_result = session.run("""
+                MATCH (v)
+                WHERE v.name IS NOT NULL AND v.is_view = true
+                WITH v,
+                     [kw IN v.keywords WHERE ANY(search_kw IN $search_keywords 
+                                                WHERE toLower(kw) CONTAINS toLower(search_kw))] as keyword_matches,
+                     [bc IN v.business_concepts WHERE ANY(search_kw IN $search_keywords 
+                                                         WHERE toLower(bc) CONTAINS toLower(search_kw))] as concept_matches
+                WHERE size(keyword_matches) > 0 OR size(concept_matches) > 0
+                RETURN v.name as table_name,
+                       v.is_view as is_view,
+                       keyword_matches,
+                       concept_matches,
+                       (size(keyword_matches) + size(concept_matches) * 2) as relevance_score
+                ORDER BY relevance_score DESC
+                LIMIT $max_views
+            """, {
+                'search_keywords': search_keywords_lower,
+                'max_views': max_views
+            })
+            
+            tables = [
+                {
+                    'table_name': record['table_name'],
+                    'is_view': record['is_view'],
+                    'keyword_matches': record['keyword_matches'],
+                    'concept_matches': record['concept_matches'],
+                    'relevance_score': record['relevance_score']
+                }
+                for record in tables_result
+            ]
+            
+            views = [
+                {
+                    'table_name': record['table_name'],
+                    'is_view': record['is_view'],
+                    'keyword_matches': record['keyword_matches'],
+                    'concept_matches': record['concept_matches'],
+                    'relevance_score': record['relevance_score']
+                }
+                for record in views_result
+            ]
+            
+            return {
+                'tables': tables,
+                'views': views
+            }
+    
     def get_all_keywords(self) -> Dict[str, Dict[str, List[str]]]:
         """Get all keywords and business concepts for debugging/analysis."""
         with self.driver.session() as session:
@@ -319,6 +523,172 @@ class Neo4jBackend(GraphBackend):
                 for record in result
             }
     
+    def store_table_clusters_with_analysis(self, clusters: List[Set[str]], cluster_analyses: List[Any]) -> None:
+        """Store table clusters with LLM-generated names and descriptions."""
+        with self.driver.session() as session:
+            # Clear existing cluster data
+            session.run("""
+                MATCH (c:Cluster)
+                DETACH DELETE c
+            """)
+            
+            # Remove existing BELONGS_TO_CLUSTER relationships (if any leftover)
+            session.run("""
+                MATCH ()-[r:BELONGS_TO_CLUSTER]-()
+                DELETE r
+            """)
+            
+            for cluster_tables, analysis in zip(clusters, cluster_analyses):
+                if len(cluster_tables) == 0:
+                    continue
+                    
+                cluster_tables_list = list(cluster_tables)  # Convert set to list for Neo4j
+                
+                # Calculate cluster metadata
+                cluster_size = len(cluster_tables_list)
+                connectivity_score = self._calculate_cluster_connectivity(cluster_tables_list)
+                
+                # Create cluster node with LLM analysis
+                session.run("""
+                    CREATE (c:Cluster {
+                        id: $cluster_id,
+                        name: $name,
+                        description: $description,
+                        business_domain: $business_domain,
+                        size: $size,
+                        connectivity_score: $connectivity_score,
+                        keywords: $keywords,
+                        confidence: $confidence,
+                        created_at: timestamp()
+                    })
+                """, {
+                    'cluster_id': analysis.cluster_id,
+                    'name': analysis.name,
+                    'description': analysis.description,
+                    'business_domain': analysis.business_domain,
+                    'size': cluster_size,
+                    'connectivity_score': connectivity_score,
+                    'keywords': analysis.keywords,
+                    'confidence': analysis.confidence
+                })
+                
+                # Create relationships from tables to cluster
+                for table_name in cluster_tables_list:
+                    session.run("""
+                        MATCH (t {name: $table_name})
+                        MATCH (c:Cluster {id: $cluster_id})
+                        CREATE (t)-[:BELONGS_TO_CLUSTER]->(c)
+                    """, {
+                        'table_name': table_name,
+                        'cluster_id': analysis.cluster_id
+                    })
+                
+                self.logger.debug(f"Created cluster '{analysis.name}' ({analysis.cluster_id}) with {cluster_size} tables")
+            
+            self.logger.info(f"Stored {len(clusters)} analyzed table clusters in Neo4j")
+    
+    def store_table_clusters(self, clusters: List[Set[str]]) -> None:
+        """Store table clusters as Cluster nodes with relationships to tables (legacy method)."""
+        with self.driver.session() as session:
+            # Clear existing cluster data
+            session.run("""
+                MATCH (c:Cluster)
+                DETACH DELETE c
+            """)
+            
+            # Remove existing BELONGS_TO_CLUSTER relationships (if any leftover)
+            session.run("""
+                MATCH ()-[r:BELONGS_TO_CLUSTER]-()
+                DELETE r
+            """)
+            
+            for i, cluster_tables in enumerate(clusters, 1):
+                if len(cluster_tables) == 0:
+                    continue
+                    
+                cluster_id = f"cluster_{i}"
+                cluster_tables_list = list(cluster_tables)  # Convert set to list for Neo4j
+                
+                # Calculate cluster metadata
+                cluster_size = len(cluster_tables_list)
+                connectivity_score = self._calculate_cluster_connectivity(cluster_tables_list)
+                domain_keywords = self._get_cluster_keywords(cluster_tables_list)
+                
+                # Create cluster node
+                session.run("""
+                    CREATE (c:Cluster {
+                        id: $cluster_id,
+                        name: $cluster_id,
+                        description: $description,
+                        size: $size,
+                        connectivity_score: $connectivity_score,
+                        keywords: $keywords,
+                        created_at: timestamp()
+                    })
+                """, {
+                    'cluster_id': cluster_id,
+                    'description': f"Database cluster containing {cluster_size} related tables",
+                    'size': cluster_size,
+                    'connectivity_score': connectivity_score,
+                    'keywords': domain_keywords
+                })
+                
+                # Create relationships from tables to cluster
+                for table_name in cluster_tables_list:
+                    session.run("""
+                        MATCH (t {name: $table_name})
+                        MATCH (c:Cluster {id: $cluster_id})
+                        CREATE (t)-[:BELONGS_TO_CLUSTER]->(c)
+                    """, {
+                        'table_name': table_name,
+                        'cluster_id': cluster_id
+                    })
+                
+                self.logger.debug(f"Created cluster {cluster_id} with {cluster_size} tables")
+            
+            self.logger.info(f"Stored {len(clusters)} table clusters in Neo4j")
+    
+    def _calculate_cluster_connectivity(self, cluster_tables: List[str]) -> float:
+        """Calculate internal connectivity score for a cluster."""
+        if len(cluster_tables) <= 1:
+            return 1.0
+            
+        with self.driver.session() as session:
+            # Count internal edges within the cluster
+            result = session.run("""
+                MATCH (a)-[r]-(b)
+                WHERE a.name IN $cluster_tables 
+                AND b.name IN $cluster_tables
+                AND a.name <> b.name
+                RETURN count(DISTINCT r) as internal_edges
+            """, cluster_tables=cluster_tables)
+            
+            internal_edges = result.single()['internal_edges']
+            
+            # Maximum possible edges in a cluster (undirected graph)
+            max_possible_edges = len(cluster_tables) * (len(cluster_tables) - 1) / 2
+            
+            # Return connectivity score (0 to 1)
+            return internal_edges / max_possible_edges if max_possible_edges > 0 else 0.0
+    
+    def _get_cluster_keywords(self, cluster_tables: List[str]) -> List[str]:
+        """Get aggregated keywords from all tables in a cluster."""
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (t)
+                WHERE t.name IN $cluster_tables
+                RETURN t.keywords as keywords, t.business_concepts as business_concepts
+            """, cluster_tables=cluster_tables)
+            
+            all_keywords = set()
+            for record in result:
+                keywords = record['keywords'] or []
+                business_concepts = record['business_concepts'] or []
+                all_keywords.update(keywords)
+                all_keywords.update(business_concepts)
+            
+            return sorted(list(all_keywords))
+
     def __del__(self):
         """Cleanup when object is destroyed."""
         self.close()

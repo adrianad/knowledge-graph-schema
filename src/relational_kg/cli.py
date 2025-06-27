@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from .analyzer import SchemaAnalyzer
 from .visualizer import GraphVisualizer
 from .llm_extractor import LLMKeywordExtractor
+from .llm_cluster_analyzer import LLMClusterAnalyzer
 
 
 # Load environment variables
@@ -54,7 +55,7 @@ def backend_options(f):
     f = click.option('--neo4j-password', help='Neo4j password (overrides NEO4J_PASSWORD env var)')(f)
     f = click.option('--neo4j-user', help='Neo4j username (overrides NEO4J_USER env var)')(f)
     f = click.option('--neo4j-uri', help='Neo4j connection URI (overrides NEO4J_URI env var)')(f)
-    f = click.option('--backend', '-b', default='networkx', help='Graph backend (networkx, neo4j)')(f)
+    f = click.option('--backend', '-b', default='neo4j', help='Graph backend (networkx, neo4j)')(f)
     f = click.option('--include-views/--exclude-views', default=True, help='Include database views in analysis')(f)
     return f
 
@@ -173,13 +174,6 @@ def find_tables(connection: str, keywords: str, max_tables: int, include_related
                     click.echo(f"  🔗 Related tables: {', '.join(sorted(related))}")
                     all_tables.update(related)
         
-        # Export schema subset for all identified tables
-        if all_tables:
-            schema_subset = analyzer.export_schema_subset(list(all_tables))
-            output_file = f"schema_subset_{'-'.join(keyword_list)}.json"
-            with open(output_file, 'w') as f:
-                json.dump(schema_subset, f, indent=2)
-            click.echo(f"\\n💾 Schema subset saved to {output_file}")
         
         analyzer.close()
         
@@ -288,22 +282,44 @@ def summary(connection: str, backend: str, neo4j_uri: str, neo4j_user: str, neo4
         click.echo("📊 Database Schema Summary")
         click.echo("=" * 40)
         click.echo(f"Database Type: {summary['database_type']}")
-        click.echo(f"Total Tables: {summary['total_tables']}")
+        
+        # Show separate counts if available
+        if 'total_entities' in summary:
+            click.echo(f"Total Tables: {summary['total_tables']}")
+            click.echo(f"Total Views: {summary['total_views']}")
+            click.echo(f"Total Entities: {summary['total_entities']}")
+        else:
+            click.echo(f"Total Tables: {summary['total_tables']}")
+        
         
         stats = summary['graph_statistics']
         click.echo(f"Graph Edges: {stats['edge_count']}")
         click.echo(f"Graph Density: {stats['density']:.3f}")
         click.echo(f"Is Connected: {stats['is_connected']}")
-        click.echo(f"Connected Components: {stats['strongly_connected_components']}")
+        if 'strongly_connected_components' in stats:
+            click.echo(f"Connected Components: {stats['strongly_connected_components']}")
         
         click.echo(f"\\n🏘️  Table Clusters ({len(summary['table_clusters'])}):")
         for i, cluster in enumerate(summary['table_clusters'], 1):
             if len(cluster) > 1:  # Only show clusters with multiple tables
                 click.echo(f"  {i}. {', '.join(sorted(cluster))}")
         
-        click.echo("\\n🌟 Most Important Tables:")
-        for table_info in summary['most_important_tables'][:10]:
-            click.echo(f"  • {table_info['table']} (score: {table_info['importance_score']:.3f})")
+        # Show separate importance lists if available
+        if 'most_important_views' in summary:
+            click.echo("\\n🗃️  Most Important Tables:")
+            for table_info in summary['most_important_tables'][:20]:
+                click.echo(f"  • {table_info['table']} (score: {table_info['importance_score']:.3f})")
+            
+            if summary['most_important_views']:
+                click.echo("\\n👁️  Most Important Views:")
+                for view_info in summary['most_important_views'][:10]:
+                    click.echo(f"  • {view_info['table']} (score: {view_info['importance_score']:.3f})")
+            else:
+                click.echo("\\n👁️  No views found or views have no connections")
+        else:
+            click.echo("\\n🌟 Most Important Tables:")
+            for table_info in summary['most_important_tables'][:20]:
+                click.echo(f"  • {table_info['table']} (score: {table_info['importance_score']:.3f})")
         
         analyzer.close()
         
@@ -379,12 +395,211 @@ def llm_keyword_extraction(connection: str, include_views: bool, max_concurrent:
 
 @main.command()
 @click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
+@click.option('--table', '-t', required=True, help='Table name to explore relationships from')
+@click.option('--hops', '-h', default=2, help='Number of relationship hops to explore (default: 2)')
+@click.option('--show-views/--hide-views', default=False, help='Show views in the relationship exploration results')
+@backend_options
+def explore_table(connection: str, table: str, hops: int, show_views: bool, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
+    """Explore all relationships from a specific table within N hops."""
+    try:
+        # Use DATABASE_URL from environment if connection not provided
+        connection_final = connection or os.getenv('DATABASE_URL')
+        if not connection_final:
+            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
+            sys.exit(1)
+            
+        analyzer = _create_analyzer(connection_final, backend, neo4j_uri, neo4j_user, neo4j_password)
+        analyzer.analyze_schema(include_views=include_views)
+        
+        click.echo(f"🔍 Exploring relationships from table '{table}' within {hops} hops...")
+        
+        # Check if table exists
+        if table not in analyzer.tables:
+            click.echo(f"❌ Table '{table}' not found in database schema")
+            available_tables = [t for t in analyzer.tables.keys() if not analyzer.tables[t].is_view]
+            if available_tables:
+                click.echo(f"💡 Available tables: {', '.join(sorted(available_tables)[:10])}{'...' if len(available_tables) > 10 else ''}")
+            return
+        
+        # Get related tables within specified hops
+        related_tables = analyzer.backend.find_related_tables(table, max_distance=hops)
+        
+        if not related_tables:
+            click.echo(f"❌ No related tables found within {hops} hops from '{table}'")
+            return
+        
+        # Separate tables and views
+        related_table_names = []
+        related_view_names = []
+        
+        for related_table in related_tables:
+            if related_table in analyzer.tables:
+                if analyzer.tables[related_table].is_view:
+                    related_view_names.append(related_table)
+                else:
+                    related_table_names.append(related_table)
+        
+        # Show results
+        click.echo(f"\\n📋 Found {len(related_tables)} related entities within {hops} hops:")
+        
+        if related_table_names:
+            click.echo(f"\\n🗃️  Related Tables ({len(related_table_names)}):")
+            for i, related_table in enumerate(sorted(related_table_names), 1):
+                # Show connection path (limit to user's hop request)
+                path = analyzer.find_connection_path(table, related_table, max_hops=hops)
+                if path and len(path) > 1:
+                    path_str = " → ".join(path)
+                    click.echo(f"  {i}. {related_table}")
+                    click.echo(f"     Path: {path_str}")
+                else:
+                    click.echo(f"  {i}. {related_table}")
+        
+        if related_view_names and show_views:
+            click.echo(f"\\n👁️  Related Views ({len(related_view_names)}):")
+            for i, related_view in enumerate(sorted(related_view_names), 1):
+                # Show connection path (limit to user's hop request)
+                path = analyzer.find_connection_path(table, related_view, max_hops=hops)
+                if path and len(path) > 1:
+                    path_str = " → ".join(path)
+                    click.echo(f"  {i}. {related_view}")
+                    click.echo(f"     Path: {path_str}")
+                else:
+                    click.echo(f"  {i}. {related_view}")
+        elif related_view_names and not show_views:
+            click.echo(f"\\n👁️  Found {len(related_view_names)} related views (use --show-views to show them)")
+        
+        # Show table details for the source table
+        source_table_info = analyzer.tables[table]
+        click.echo(f"\\n📊 Source Table Details: {table}")
+        click.echo(f"  • Columns: {len(source_table_info.columns)}")
+        click.echo(f"  • Foreign Keys: {len(source_table_info.foreign_keys)}")
+        if source_table_info.foreign_keys:
+            click.echo("  • References:")
+            for fk in source_table_info.foreign_keys:
+                fk_info = f"    - {', '.join(fk['constrained_columns'])} → {fk['referred_table']}"
+                click.echo(fk_info)
+        
+        
+        analyzer.close()
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
+@click.option('--method', '-m', default='community', type=click.Choice(['community', 'importance']), help='Clustering method: community detection or importance-based')
+@click.option('--min-size', default=4, help='Minimum cluster size (importance method only)')
+@click.option('--max-hops', default=2, help='Maximum relationship hops (importance method only)')
+@click.option('--top-pct', default=0.2, help='Percentage of top tables to use as cores (importance method only)')
+@backend_options
+def create_clusters(connection: str, method: str, min_size: int, max_hops: int, top_pct: float, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
+    """Calculate and store table clusters in Neo4j database."""
+    try:
+        # Use DATABASE_URL from environment if connection not provided
+        connection_final = connection or os.getenv('DATABASE_URL')
+        if not connection_final:
+            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
+            sys.exit(1)
+        
+        # Force Neo4j backend for cluster storage
+        if backend != 'neo4j':
+            click.echo("⚠️  Cluster storage requires Neo4j backend, switching to Neo4j...")
+            backend = 'neo4j'
+            
+        analyzer = _create_analyzer(connection_final, backend, neo4j_uri, neo4j_user, neo4j_password)
+        
+        click.echo("🔍 Analyzing database schema...")
+        analyzer.analyze_schema(include_views=include_views)
+        
+        if method == 'importance':
+            click.echo(f"🧮 Calculating importance-based clusters (min_size={min_size}, max_hops={max_hops}, top_pct={top_pct:.1%})...")
+            clusters = analyzer.backend.find_importance_based_clusters(
+                min_cluster_size=min_size,
+                max_hops=max_hops,
+                top_tables_pct=top_pct
+            )
+            all_clusters = clusters  # For consistent reporting
+        else:
+            click.echo("🧮 Calculating community-based table clusters...")
+            all_clusters = analyzer.backend.find_table_clusters()
+            
+            # Filter clusters to minimum size of 4 tables
+            clusters = [cluster for cluster in all_clusters if len(cluster) >= min_size]
+        
+        if not clusters:
+            click.echo(f"❌ No clusters with {min_size}+ tables found in the database schema")
+            if all_clusters and method == 'community':
+                small_clusters = len(all_clusters) - len(clusters)
+                click.echo(f"ℹ️  Found {small_clusters} clusters with <{min_size} tables (filtered out)")
+            return
+        
+        click.echo(f"📊 Found {len(clusters)} clusters with {min_size}+ tables")
+        if len(all_clusters) > len(clusters) and method == 'community':
+            filtered_count = len(all_clusters) - len(clusters)
+            click.echo(f"🔽 Filtered out {filtered_count} small clusters (<{min_size} tables)")
+        
+        # Display cluster information before analysis
+        for i, cluster in enumerate(clusters, 1):
+            cluster_size = len(cluster)
+            cluster_tables = ', '.join(sorted(cluster)[:5])  # Show first 5 tables
+            if len(cluster) > 5:
+                cluster_tables += f" ... (+{len(cluster) - 5} more)"
+            click.echo(f"  Cluster {i}: {cluster_size} tables - {cluster_tables}")
+        
+        click.echo("🤖 Analyzing clusters with LLM for naming and descriptions...")
+        try:
+            cluster_analyzer = LLMClusterAnalyzer()
+            max_concurrent = int(os.getenv('LLM_MAX_CONCURRENT', '5'))
+            
+            # Convert clusters to list format for LLM analysis
+            cluster_lists = [list(cluster) for cluster in clusters]
+            cluster_analyses = cluster_analyzer.analyze_clusters_batch_sync(cluster_lists, max_concurrent)
+            
+            click.echo("💾 Storing enhanced clusters in Neo4j...")
+            analyzer.backend.store_table_clusters_with_analysis(clusters, cluster_analyses)
+            
+            # Display enhanced cluster information
+            click.echo("\n📋 Generated Cluster Analysis:")
+            for analysis in cluster_analyses:
+                click.echo(f"\n🏷️  {analysis.name} ({analysis.cluster_id})")
+                click.echo(f"   📝 {analysis.description}")
+                click.echo(f"   🏢 Domain: {analysis.business_domain}")
+                if analysis.keywords:
+                    click.echo(f"   🏷️  Keywords: {', '.join(analysis.keywords)}")
+                click.echo(f"   📊 Confidence: {analysis.confidence:.2f}")
+                
+        except Exception as e:
+            click.echo(f"⚠️  LLM analysis failed ({e}), falling back to basic cluster storage...")
+            analyzer.backend.store_table_clusters(clusters)
+        
+        click.echo("✅ Clusters successfully created and stored!")
+        click.echo(f"🏘️  Total clusters: {len(clusters)}")
+        click.echo(f"📋 Total tables clustered: {sum(len(cluster) for cluster in clusters)}")
+        
+        # Show cluster statistics
+        cluster_sizes = [len(cluster) for cluster in clusters]
+        if cluster_sizes:
+            click.echo(f"📏 Cluster sizes: min={min(cluster_sizes)}, max={max(cluster_sizes)}, avg={sum(cluster_sizes)/len(cluster_sizes):.1f}")
+        
+        analyzer.close()
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
 @click.option('--query', '-q', required=True, help='Natural language query to find relevant tables')
-@click.option('--max-results', '-m', default=10, help='Maximum number of results to return')
+@click.option('--max-tables', default=5, help='Maximum number of tables to return')
+@click.option('--max-views', default=5, help='Maximum number of views to return')
+@click.option('--combined/--separate', default=False, help='Show combined results or separate tables/views')
 @click.option('--neo4j-uri', help='Neo4j connection URI (overrides NEO4J_URI env var)')
 @click.option('--neo4j-user', help='Neo4j username (overrides NEO4J_USER env var)')
 @click.option('--neo4j-password', help='Neo4j password (overrides NEO4J_PASSWORD env var)')
-def find_tables_semantic(connection: str, query: str, max_results: int, neo4j_uri: str, neo4j_user: str, neo4j_password: str) -> None:
+def find_tables_semantic(connection: str, query: str, max_tables: int, max_views: int, combined: bool, neo4j_uri: str, neo4j_user: str, neo4j_password: str) -> None:
     """Find relevant tables using semantic keyword matching."""
     try:
         # Use DATABASE_URL from environment if connection not provided
@@ -401,24 +616,60 @@ def find_tables_semantic(connection: str, query: str, max_results: int, neo4j_ur
         # Extract keywords from the user query (simple word splitting)
         search_keywords = [word.strip().lower() for word in query.replace(',', ' ').split() if len(word.strip()) > 2]
         
-        # Search using Neo4j semantic matching
-        results = analyzer.backend.find_tables_by_keywords(search_keywords, max_results)
-        
-        if not results:
-            click.echo("❌ No relevant tables found for your query")
-            return
-        
-        click.echo(f"\n📋 Found {len(results)} relevant tables/views:")
-        
-        for i, result in enumerate(results, 1):
-            entity_type = "View" if result['is_view'] else "Table"
-            click.echo(f"\n{i}. {result['table_name']} ({entity_type}) - Score: {result['relevance_score']}")
+        if combined:
+            # Use original combined search
+            results = analyzer.backend.find_tables_by_keywords(search_keywords, max_tables + max_views)
             
-            if result['keyword_matches']:
-                click.echo(f"   🏷️  Keyword matches: {', '.join(result['keyword_matches'])}")
+            if not results:
+                click.echo("❌ No relevant tables found for your query")
+                return
             
-            if result['concept_matches']:
-                click.echo(f"   🏢 Business concept matches: {', '.join(result['concept_matches'])}")
+            click.echo(f"\n📋 Found {len(results)} relevant tables/views:")
+            
+            for i, result in enumerate(results, 1):
+                entity_type = "View" if result['is_view'] else "Table"
+                click.echo(f"\n{i}. {result['table_name']} ({entity_type}) - Score: {result['relevance_score']}")
+                
+                if result['keyword_matches']:
+                    click.echo(f"   🏷️  Keyword matches: {', '.join(result['keyword_matches'])}")
+                
+                if result['concept_matches']:
+                    click.echo(f"   🏢 Business concept matches: {', '.join(result['concept_matches'])}")
+        else:
+            # Use separated search for tables and views
+            results = analyzer.backend.find_tables_and_views_by_keywords(search_keywords, max_tables, max_views)
+            
+            if not results['tables'] and not results['views']:
+                click.echo("❌ No relevant tables or views found for your query")
+                return
+            
+            # Display tables
+            if results['tables']:
+                click.echo(f"\n🗃️  Top {len(results['tables'])} Tables:")
+                for i, result in enumerate(results['tables'], 1):
+                    click.echo(f"\n{i}. {result['table_name']} (Table) - Score: {result['relevance_score']}")
+                    
+                    if result['keyword_matches']:
+                        click.echo(f"   🏷️  Keyword matches: {', '.join(result['keyword_matches'])}")
+                    
+                    if result['concept_matches']:
+                        click.echo(f"   🏢 Business concept matches: {', '.join(result['concept_matches'])}")
+            else:
+                click.echo(f"\n🗃️  No tables found matching your query")
+            
+            # Display views
+            if results['views']:
+                click.echo(f"\n👁️  Top {len(results['views'])} Views:")
+                for i, result in enumerate(results['views'], 1):
+                    click.echo(f"\n{i}. {result['table_name']} (View) - Score: {result['relevance_score']}")
+                    
+                    if result['keyword_matches']:
+                        click.echo(f"   🏷️  Keyword matches: {', '.join(result['keyword_matches'])}")
+                    
+                    if result['concept_matches']:
+                        click.echo(f"   🏢 Business concept matches: {', '.join(result['concept_matches'])}")
+            else:
+                click.echo(f"\n👁️  No views found matching your query")
         
         analyzer.close()
         

@@ -26,11 +26,19 @@ class NetworkXBackend(GraphBackend):
         """Find clusters/communities of related tables."""
         return self.schema_graph.find_table_clusters()
     
+    def find_importance_based_clusters(self, min_cluster_size: int = 4, max_hops: int = 2, top_tables_pct: float = 0.2) -> List[Set[str]]:
+        """Find clusters based on most important tables as cores."""
+        return self.schema_graph.find_importance_based_clusters(min_cluster_size, max_hops, top_tables_pct)
+    
     def get_table_importance(self) -> Dict[str, float]:
         """Get importance scores for all tables."""
         return self.schema_graph.get_table_importance()
     
-    def find_shortest_path(self, source: str, target: str) -> Optional[List[str]]:
+    def get_table_and_view_importance(self) -> Dict[str, Dict[str, Any]]:
+        """Get importance scores for tables and views separately."""
+        return self.schema_graph.get_table_and_view_importance()
+    
+    def find_shortest_path(self, source: str, target: str, max_hops: Optional[int] = None) -> Optional[List[str]]:
         """Find shortest path between two tables."""
         return self.schema_graph.find_shortest_path(source, target)
     

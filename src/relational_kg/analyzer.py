@@ -155,12 +155,12 @@ class SchemaAnalyzer:
         
         return sorted_suggestions[:max_suggestions]
     
-    def find_connection_path(self, table1: str, table2: str) -> Optional[List[str]]:
+    def find_connection_path(self, table1: str, table2: str, max_hops: Optional[int] = None) -> Optional[List[str]]:
         """Find connection path between two tables."""
         if not self._connected:
             raise RuntimeError("Schema not analyzed. Call analyze_schema() first.")
         
-        return self.backend.find_shortest_path(table1, table2)
+        return self.backend.find_shortest_path(table1, table2, max_hops)
     
     def get_schema_summary(self) -> Dict[str, Any]:
         """Get summary of the database schema."""
@@ -169,25 +169,62 @@ class SchemaAnalyzer:
         
         stats = self.backend.get_graph_stats()
         clusters = self.backend.find_table_clusters()
-        importance = self.backend.get_table_importance()
         
-        # Find most important tables
-        top_tables = sorted(
-            importance.items(), 
-            key=lambda x: x[1], 
-            reverse=True
-        )[:10]
-        
-        return {
-            'total_tables': len(self.tables),
-            'graph_statistics': stats,
-            'table_clusters': [list(cluster) for cluster in clusters],
-            'most_important_tables': [
-                {'table': table, 'importance_score': score} 
-                for table, score in top_tables
-            ],
-            'database_type': self.extractor._get_db_type()
-        }
+        # Check if backend supports separate table/view importance
+        if hasattr(self.backend, 'get_table_and_view_importance'):
+            importance_data = self.backend.get_table_and_view_importance()
+            
+            # Find most important tables
+            top_tables = sorted(
+                importance_data['tables'].items(), 
+                key=lambda x: x[1], 
+                reverse=True
+            )[:20]
+            
+            # Find most important views
+            top_views = sorted(
+                importance_data['views'].items(), 
+                key=lambda x: x[1], 
+                reverse=True
+            )[:10]
+            
+            return {
+                'total_tables': len([t for t in self.tables.values() if not t.is_view]),
+                'total_views': len([t for t in self.tables.values() if t.is_view]),
+                'total_entities': len(self.tables),
+                'graph_statistics': stats,
+                'table_clusters': [list(cluster) for cluster in clusters],
+                'most_important_tables': [
+                    {'table': table, 'importance_score': score} 
+                    for table, score in top_tables
+                ],
+                'most_important_views': [
+                    {'table': table, 'importance_score': score} 
+                    for table, score in top_views
+                ],
+                'database_type': self.extractor._get_db_type()
+            }
+        else:
+            # Fallback to original behavior for NetworkX backend
+            importance = self.backend.get_table_importance()
+            
+            # Find most important tables
+            top_tables = sorted(
+                importance.items(), 
+                key=lambda x: x[1], 
+                reverse=True
+            )[:20]
+            
+            return {
+                'total_tables': len(self.tables),
+                'graph_statistics': stats,
+                'table_clusters': [list(cluster) for cluster in clusters],
+                'most_important_tables': [
+                    {'table': table, 'importance_score': score} 
+                    for table, score in top_tables
+                ],
+                'database_type': self.extractor._get_db_type()
+            }
     
     def export_schema_subset(self, table_names: List[str]) -> Dict[str, Any]:
         """Export schema information for a subset of tables."""
@@ -196,7 +233,7 @@ class SchemaAnalyzer:
         
         subset = {}
         for table_name in table_names:
-            if table_name in self.graph.tables:
+            if table_name in self.tables:
                 table_info = self.tables[table_name]
                 subset[table_name] = {
                     'columns': [
