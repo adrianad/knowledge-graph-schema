@@ -38,40 +38,62 @@ class Neo4jBackend(GraphBackend):
             # Clear existing data
             session.run("MATCH (n) DETACH DELETE n")
             
-            # Create table nodes
+            # Create table and view nodes
             for table_name, table_info in tables.items():
-                session.run("""
-                    CREATE (t:Table {
+                node_label = "View" if table_info.is_view else "Table"
+                session.run(f"""
+                    CREATE (t:{node_label} {{
                         name: $name,
                         columns: $columns,
                         primary_keys: $primary_keys,
-                        column_count: $column_count
-                    })
+                        column_count: $column_count,
+                        is_view: $is_view
+                    }})
                 """, {
                     'name': table_name,
                     'columns': [col.name for col in table_info.columns],
                     'primary_keys': [col.name for col in table_info.columns if col.primary_key],
-                    'column_count': len(table_info.columns)
+                    'column_count': len(table_info.columns),
+                    'is_view': table_info.is_view
                 })
             
             # Create relationships
             for table_name, table_info in tables.items():
-                for fk in table_info.foreign_keys:
-                    target_table = fk['referred_table']
-                    if target_table in tables:
-                        session.run("""
-                            MATCH (source:Table {name: $source})
-                            MATCH (target:Table {name: $target})
-                            CREATE (source)-[:REFERENCES {
-                                foreign_key_columns: $fk_columns,
-                                strength: $strength
-                            }]->(target)
-                        """, {
-                            'source': table_name,
-                            'target': target_table,
-                            'fk_columns': fk['constrained_columns'],
-                            'strength': self._calculate_relationship_strength(fk)
-                        })
+                # Foreign key relationships for tables
+                if not table_info.is_view:
+                    for fk in table_info.foreign_keys:
+                        target_table = fk['referred_table']
+                        if target_table in tables:
+                            session.run("""
+                                MATCH (source {name: $source})
+                                MATCH (target {name: $target})
+                                CREATE (source)-[:REFERENCES {
+                                    foreign_key_columns: $fk_columns,
+                                    strength: $strength,
+                                    relationship_type: 'foreign_key'
+                                }]->(target)
+                            """, {
+                                'source': table_name,
+                                'target': target_table,
+                                'fk_columns': fk['constrained_columns'],
+                                'strength': self._calculate_relationship_strength(fk)
+                            })
+                
+                # View dependency relationships
+                if table_info.is_view and table_info.view_dependencies:
+                    for dependency in table_info.view_dependencies:
+                        if dependency in tables:
+                            session.run("""
+                                MATCH (source {name: $source})
+                                MATCH (target {name: $target})
+                                CREATE (source)-[:DEPENDS_ON {
+                                    strength: 1.0,
+                                    relationship_type: 'view_dependency'
+                                }]->(target)
+                            """, {
+                                'source': table_name,
+                                'target': dependency
+                            })
         
         self.logger.info(f"Built Neo4j graph with {len(tables)} nodes")
     
@@ -92,33 +114,32 @@ class Neo4jBackend(GraphBackend):
         return strength
     
     def find_related_tables(self, table_name: str, max_distance: int = 2) -> Set[str]:
-        """Find tables related to the given table within max_distance hops."""
+        """Find tables/views related to the given table within max_distance hops."""
         with self.driver.session() as session:
-            # Use a more compatible query that doesn't rely on APOC
+            # Use a more compatible query that handles both Tables and Views
             result = session.run("""
-                MATCH (start:Table {name: $table_name})
+                MATCH (start {name: $table_name})
                 CALL {
                     WITH start
-                    MATCH path = (start)-[:REFERENCES*1..%d]-(connected:Table)
-                    RETURN DISTINCT connected.name as table_name
-                    UNION
-                    WITH start
-                    MATCH path = (connected:Table)-[:REFERENCES*1..%d]-(start)
+                    MATCH path = (start)-[*1..%d]-(connected)
+                    WHERE connected.name IS NOT NULL
                     RETURN DISTINCT connected.name as table_name
                 }
                 RETURN DISTINCT table_name
-            """ % (max_distance, max_distance), table_name=table_name)
+            """ % max_distance, table_name=table_name)
             
             return {record['table_name'] for record in result if record['table_name'] != table_name}
     
     def find_table_clusters(self) -> List[Set[str]]:
-        """Find clusters/communities of related tables."""
+        """Find clusters/communities of related tables and views."""
         with self.driver.session() as session:
             # Simple clustering based on connected components
             # Note: This is a basic implementation without GDS library
             result = session.run("""
-                MATCH (t:Table)
-                OPTIONAL MATCH path = (t)-[:REFERENCES*]-(connected:Table)
+                MATCH (t)
+                WHERE t.name IS NOT NULL
+                OPTIONAL MATCH path = (t)-[*]-(connected)
+                WHERE connected.name IS NOT NULL
                 WITH t, collect(DISTINCT connected.name) + [t.name] as component
                 RETURN DISTINCT component
             """)
@@ -145,26 +166,27 @@ class Neo4jBackend(GraphBackend):
             return merged
     
     def get_table_importance(self) -> Dict[str, float]:
-        """Get importance scores for all tables."""
+        """Get importance scores for all tables and views."""
         with self.driver.session() as session:
             # Calculate importance based on degree centrality
             result = session.run("""
-                MATCH (t:Table)
-                OPTIONAL MATCH (t)-[r:REFERENCES]-()
+                MATCH (t)
+                WHERE t.name IS NOT NULL
+                OPTIONAL MATCH (t)-[r]-()
                 WITH t, count(r) as degree
                 RETURN t.name as table_name, 
-                       toFloat(degree) / (SELECT count(*) FROM (MATCH (all:Table) RETURN all)) as importance
+                       toFloat(degree) / (SELECT count(*) FROM (MATCH (all) WHERE all.name IS NOT NULL RETURN all)) as importance
             """)
             
             return {record['table_name']: record['importance'] for record in result}
     
     def find_shortest_path(self, source: str, target: str) -> Optional[List[str]]:
-        """Find shortest path between two tables."""
+        """Find shortest path between two tables/views."""
         with self.driver.session() as session:
             result = session.run("""
-                MATCH (start:Table {name: $source})
-                MATCH (end:Table {name: $target})
-                MATCH path = shortestPath((start)-[:REFERENCES*]-(end))
+                MATCH (start {name: $source})
+                MATCH (end {name: $target})
+                MATCH path = shortestPath((start)-[*]-(end))
                 RETURN [node in nodes(path) | node.name] as path
             """, source=source, target=target)
             
@@ -172,37 +194,38 @@ class Neo4jBackend(GraphBackend):
             return record['path'] if record else None
     
     def get_table_neighbors(self, table_name: str) -> Set[str]:
-        """Get direct neighbors of a table."""
+        """Get direct neighbors of a table/view."""
         with self.driver.session() as session:
             result = session.run("""
-                MATCH (t:Table {name: $table_name})
-                OPTIONAL MATCH (t)-[:REFERENCES]-(neighbor:Table)
+                MATCH (t {name: $table_name})
+                OPTIONAL MATCH (t)-[]-(neighbor)
+                WHERE neighbor.name IS NOT NULL
                 RETURN DISTINCT neighbor.name as neighbor_name
             """, table_name=table_name)
             
             return {record['neighbor_name'] for record in result if record['neighbor_name']}
     
     def get_all_tables(self) -> Set[str]:
-        """Get all table names in the graph."""
+        """Get all table and view names in the graph."""
         with self.driver.session() as session:
-            result = session.run("MATCH (t:Table) RETURN t.name as table_name")
+            result = session.run("MATCH (t) WHERE t.name IS NOT NULL RETURN t.name as table_name")
             return {record['table_name'] for record in result}
     
     def get_graph_stats(self) -> Dict[str, Any]:
         """Get graph statistics (nodes, edges, etc.)."""
         with self.driver.session() as session:
             # Get node count
-            node_result = session.run("MATCH (t:Table) RETURN count(t) as node_count")
+            node_result = session.run("MATCH (t) WHERE t.name IS NOT NULL RETURN count(t) as node_count")
             node_count = node_result.single()['node_count']
             
-            # Get edge count
-            edge_result = session.run("MATCH ()-[r:REFERENCES]->() RETURN count(r) as edge_count")
+            # Get edge count  
+            edge_result = session.run("MATCH ()-[r]->() RETURN count(r) as edge_count")
             edge_count = edge_result.single()['edge_count']
             
             # Check connectivity (simplified)
             connectivity_result = session.run("""
-                MATCH (t:Table)
-                WHERE NOT EXISTS((t)-[:REFERENCES]-())
+                MATCH (t)
+                WHERE t.name IS NOT NULL AND NOT EXISTS((t)-[]-())
                 RETURN count(t) as isolated_count
             """)
             isolated_count = connectivity_result.single()['isolated_count']

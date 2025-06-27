@@ -13,11 +13,12 @@ from .database import TableInfo, ColumnInfo
 
 @dataclass
 class GraphNode:
-    """Graph node representing a table."""
+    """Graph node representing a table or view."""
     table_name: str
     columns: List[str]
     primary_keys: List[str]
     column_count: int
+    is_view: bool = False
     
 
 @dataclass
@@ -47,7 +48,7 @@ class SchemaGraph:
         self.logger.info(f"Built graph with {len(self.graph.nodes)} nodes and {len(self.graph.edges)} edges")
     
     def _add_table_nodes(self) -> None:
-        """Add table nodes to the graph."""
+        """Add table and view nodes to the graph."""
         for table_name, table_info in self.tables.items():
             columns = [col.name for col in table_info.columns]
             primary_keys = [col.name for col in table_info.columns if col.primary_key]
@@ -56,31 +57,53 @@ class SchemaGraph:
                 table_name=table_name,
                 columns=columns,
                 primary_keys=primary_keys,
-                column_count=len(columns)
+                column_count=len(columns),
+                is_view=table_info.is_view
             )
             
             self.graph.add_node(table_name, **node_data.__dict__)
     
     def _add_relationship_edges(self) -> None:
-        """Add relationship edges based on foreign keys."""
+        """Add relationship edges based on foreign keys and view dependencies."""
         for table_name, table_info in self.tables.items():
-            for fk in table_info.foreign_keys:
-                target_table = fk['referred_table']
-                if target_table in self.tables:
-                    
-                    edge_data = GraphEdge(
-                        source=table_name,
-                        target=target_table,
-                        relationship_type='foreign_key',
-                        foreign_key_columns=fk['constrained_columns'],
-                        strength=self._calculate_relationship_strength(fk)
-                    )
-                    
-                    self.graph.add_edge(
-                        table_name, 
-                        target_table, 
-                        **edge_data.__dict__
-                    )
+            # Add foreign key relationships for tables
+            if not table_info.is_view:
+                for fk in table_info.foreign_keys:
+                    target_table = fk['referred_table']
+                    if target_table in self.tables:
+                        
+                        edge_data = GraphEdge(
+                            source=table_name,
+                            target=target_table,
+                            relationship_type='foreign_key',
+                            foreign_key_columns=fk['constrained_columns'],
+                            strength=self._calculate_relationship_strength(fk)
+                        )
+                        
+                        self.graph.add_edge(
+                            table_name, 
+                            target_table, 
+                            **edge_data.__dict__
+                        )
+            
+            # Add view dependency relationships
+            if table_info.is_view and table_info.view_dependencies:
+                for dependency in table_info.view_dependencies:
+                    if dependency in self.tables:
+                        
+                        edge_data = GraphEdge(
+                            source=table_name,
+                            target=dependency,
+                            relationship_type='view_dependency',
+                            foreign_key_columns=[],  # Views don't have FK columns
+                            strength=1.0  # Standard strength for view dependencies
+                        )
+                        
+                        self.graph.add_edge(
+                            table_name,
+                            dependency,
+                            **edge_data.__dict__
+                        )
     
     def _calculate_relationship_strength(self, foreign_key: Dict[str, Any]) -> float:
         """Calculate strength of relationship based on foreign key properties."""

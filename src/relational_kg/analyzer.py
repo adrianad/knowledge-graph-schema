@@ -38,13 +38,13 @@ class SchemaAnalyzer:
         
         self.logger.info(f"Initialized SchemaAnalyzer with {backend} backend")
     
-    def analyze_schema(self) -> None:
+    def analyze_schema(self, include_views: bool = True) -> None:
         """Analyze database schema and build knowledge graph."""
         self.extractor.connect()
         self._connected = True
         
         # Extract schema information
-        self.tables = self.extractor.extract_schema()
+        self.tables = self.extractor.extract_schema(include_views=include_views)
         
         # Build knowledge graph using backend
         self.backend.build_from_schema(self.tables)
