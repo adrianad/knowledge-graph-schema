@@ -84,10 +84,14 @@ class DatabaseExtractor:
         
         # Extract views if requested
         if include_views:
+            # First pass: collect all views without dependencies
+            view_definitions = {}
+            
+            # Regular views
             for view_name in inspector.get_view_names():
                 columns = self._extract_columns(inspector, view_name, is_view=True)
                 view_definition = self._get_view_definition(view_name)
-                view_dependencies = self._parse_view_dependencies(view_definition, tables.keys())
+                view_definitions[view_name] = view_definition
                 
                 tables[view_name] = TableInfo(
                     name=view_name,
@@ -95,8 +99,29 @@ class DatabaseExtractor:
                     foreign_keys=[],  # Views don't have foreign keys themselves
                     is_view=True,
                     view_definition=view_definition,
-                    view_dependencies=view_dependencies
+                    view_dependencies=[]  # Will be filled in second pass
                 )
+            
+            # Materialized views (PostgreSQL)
+            materialized_views = self._get_materialized_view_names()
+            for view_name in materialized_views:
+                columns = self._extract_columns(inspector, view_name, is_view=True)
+                view_definition = self._get_materialized_view_definition(view_name)
+                view_definitions[view_name] = view_definition
+                
+                tables[view_name] = TableInfo(
+                    name=view_name,
+                    columns=columns,
+                    foreign_keys=[],  # Views don't have foreign keys themselves
+                    is_view=True,
+                    view_definition=view_definition,
+                    view_dependencies=[]  # Will be filled in second pass
+                )
+            
+            # Second pass: parse dependencies now that all tables/views are collected
+            for view_name, view_definition in view_definitions.items():
+                view_dependencies = self._parse_view_dependencies(view_definition, list(tables.keys()))
+                tables[view_name].view_dependencies = view_dependencies
             
         self.logger.info(f"Extracted {len([t for t in tables.values() if not t.is_view])} tables and {len([t for t in tables.values() if t.is_view])} views from schema")
         return tables
@@ -197,30 +222,116 @@ class DatabaseExtractor:
         # Convert to lowercase for case-insensitive matching
         view_def_lower = view_definition.lower()
         
-        # Look for FROM and JOIN clauses
-        # This is a simplified parser - more sophisticated parsing might be needed for complex views
+        # Remove extra whitespace and newlines for easier parsing
+        view_def_clean = re.sub(r'\s+', ' ', view_def_lower.strip())
+        
+        # More comprehensive patterns to handle complex SQL
         patterns = [
-            r'\bfrom\s+([a-zA-Z_][a-zA-Z0-9_]*)',
-            r'\bjoin\s+([a-zA-Z_][a-zA-Z0-9_]*)',
-            r'\binner\s+join\s+([a-zA-Z_][a-zA-Z0-9_]*)',
-            r'\bleft\s+join\s+([a-zA-Z_][a-zA-Z0-9_]*)',
-            r'\bright\s+join\s+([a-zA-Z_][a-zA-Z0-9_]*)',
-            r'\bfull\s+join\s+([a-zA-Z_][a-zA-Z0-9_]*)',
+            # FROM clauses - simple table references
+            r'\bfrom\s+(?:public\.)?([a-zA-Z_][a-zA-Z0-9_]*)',
+            # FROM clauses with parentheses
+            r'\bfrom\s+\(\s*(?:public\.)?([a-zA-Z_][a-zA-Z0-9_]*)',
+            # All JOIN variations
+            r'\b(?:inner\s+|left\s+|right\s+|full\s+|cross\s+)?(?:outer\s+)?join\s+(?:public\.)?([a-zA-Z_][a-zA-Z0-9_]*)',
+            # Tables in parenthetical expressions like "(public.table1 alias"
+            r'\(\s*(?:public\.)?([a-zA-Z_][a-zA-Z0-9_]*)\s+[a-zA-Z_][a-zA-Z0-9_]*',
         ]
         
+        # Apply patterns
         for pattern in patterns:
-            matches = re.findall(pattern, view_def_lower)
+            matches = re.findall(pattern, view_def_clean)
             for match in matches:
-                # Check if the match is actually a table/view name we know about
-                if match in [t.lower() for t in available_tables]:
-                    # Find the original case version
-                    for table in available_tables:
-                        if table.lower() == match:
-                            if table not in dependencies:
-                                dependencies.append(table)
-                            break
+                self._add_dependency_if_exists(match, available_tables, dependencies)
+        
+        # Special handling for complex FROM clauses with aliases
+        # Pattern: "FROM (public.table1 alias JOIN public.table2 alias2 ON ...)"
+        from_clause_pattern = r'\bfrom\s+\((.*?)\)'
+        from_match = re.search(from_clause_pattern, view_def_clean, re.DOTALL)
+        if from_match:
+            from_content = from_match.group(1)
+            # Extract all table names from the FROM clause content
+            table_pattern = r'(?:public\.)?([a-zA-Z_][a-zA-Z0-9_]*)\s+[a-zA-Z_][a-zA-Z0-9_]*'
+            table_matches = re.findall(table_pattern, from_content)
+            for match in table_matches:
+                self._add_dependency_if_exists(match, available_tables, dependencies)
+        
+        # Handle WHERE clause table references
+        where_patterns = [
+            r'where\s+\([^)]*\.([a-zA-Z_][a-zA-Z0-9_]*)\s*=',
+            r'and\s+\([^)]*\.([a-zA-Z_][a-zA-Z0-9_]*)\s*=',
+        ]
+        
+        for pattern in where_patterns:
+            matches = re.findall(pattern, view_def_clean)
+            for match in matches:
+                self._add_dependency_if_exists(match, available_tables, dependencies)
+        
+        # Log what we found for debugging
+        if dependencies:
+            self.logger.info(f"Found dependencies for view: {dependencies}")
+        else:
+            self.logger.warning(f"No dependencies found in view definition: {view_definition[:200]}...")
         
         return dependencies
+    
+    def _add_dependency_if_exists(self, table_candidate: str, available_tables: List[str], dependencies: List[str]) -> None:
+        """Add table to dependencies if it exists in available tables."""
+        if table_candidate in [t.lower() for t in available_tables]:
+            # Find the original case version
+            for table in available_tables:
+                if table.lower() == table_candidate:
+                    if table not in dependencies:
+                        dependencies.append(table)
+                    break
+    
+    def _get_materialized_view_names(self) -> List[str]:
+        """Get list of materialized view names (PostgreSQL specific)."""
+        if not self.engine:
+            return []
+        
+        db_type = self._get_db_type()
+        
+        if db_type != 'postgresql':
+            return []  # Only PostgreSQL supports materialized views
+        
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT schemaname, matviewname 
+                    FROM pg_matviews 
+                    WHERE schemaname = 'public'
+                """))
+                
+                return [row[1] for row in result]
+                
+        except SQLAlchemyError as e:
+            self.logger.warning(f"Failed to get materialized view names: {e}")
+            return []
+    
+    def _get_materialized_view_definition(self, view_name: str) -> Optional[str]:
+        """Get materialized view definition SQL (PostgreSQL specific)."""
+        if not self.engine:
+            return None
+        
+        db_type = self._get_db_type()
+        
+        if db_type != 'postgresql':
+            return None
+        
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT definition 
+                    FROM pg_matviews 
+                    WHERE matviewname = :view_name AND schemaname = 'public'
+                """), {"view_name": view_name})
+                
+                row = result.fetchone()
+                return row[0] if row else None
+                
+        except SQLAlchemyError as e:
+            self.logger.warning(f"Failed to get materialized view definition for {view_name}: {e}")
+            return None
     
     def get_table_names(self) -> List[str]:
         """Get list of table names."""

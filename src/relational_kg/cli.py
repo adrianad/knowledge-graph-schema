@@ -71,18 +71,31 @@ def analyze(connection: str, output: Optional[str], backend: str, neo4j_uri: str
         
         analyzer.analyze_schema(include_views=include_views)
         
-        # Get summary
-        summary = analyzer.get_schema_summary()
-        
         click.echo(f"✅ Analysis complete!")
-        click.echo(f"📊 Total tables: {summary['total_tables']}")
-        click.echo(f"🔗 Graph edges: {summary['graph_statistics']['edge_count']}")
-        click.echo(f"🏘️  Table clusters: {len(summary['table_clusters'])}")
+        click.echo(f"📊 Total tables: {len(analyzer.tables)}")
         
-        # Show most important tables
-        click.echo("\\n🌟 Most important tables:")
-        for table_info in summary['most_important_tables'][:5]:
-            click.echo(f"  • {table_info['table']} (score: {table_info['importance_score']:.3f})")
+        # Get basic stats only (avoid expensive operations)
+        try:
+            stats = analyzer.backend.get_graph_stats()
+            click.echo(f"🔗 Graph edges: {stats['edge_count']}")
+            click.echo(f"🔗 Graph nodes: {stats['node_count']}")
+        except Exception as e:
+            click.echo(f"⚠️  Could not get graph stats: {e}")
+        
+        # Skip expensive summary operations for large schemas
+        if len(analyzer.tables) < 100:
+            try:
+                summary = analyzer.get_schema_summary()
+                click.echo(f"🏘️  Table clusters: {len(summary['table_clusters'])}")
+                
+                # Show most important tables
+                click.echo("\\n🌟 Most important tables:")
+                for table_info in summary['most_important_tables'][:5]:
+                    click.echo(f"  • {table_info['table']} (score: {table_info['importance_score']:.3f})")
+            except Exception as e:
+                click.echo(f"⚠️  Skipped detailed analysis for large schema: {e}")
+        else:
+            click.echo(f"⚠️  Skipped detailed analysis for large schema ({len(analyzer.tables)} tables)")
         
         # Save graph data if requested
         if output:
