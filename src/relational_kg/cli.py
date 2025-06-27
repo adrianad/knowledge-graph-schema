@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -11,6 +12,7 @@ from dotenv import load_dotenv
 
 from .analyzer import SchemaAnalyzer
 from .visualizer import GraphVisualizer
+from .llm_extractor import LLMKeywordExtractor
 
 
 # Load environment variables
@@ -29,13 +31,19 @@ def _create_analyzer(connection: str, backend: str = 'networkx',
     """Create analyzer with specified backend."""
     backend_kwargs = {}
     if backend == 'neo4j':
-        if not all([neo4j_uri, neo4j_user, neo4j_password]):
-            click.echo("Neo4j backend requires --neo4j-uri, --neo4j-user, and --neo4j-password")
+        # Use environment variables as defaults
+        uri = neo4j_uri or os.getenv('NEO4J_URI', 'bolt://localhost:7687')
+        user = neo4j_user or os.getenv('NEO4J_USER', 'neo4j')
+        password = neo4j_password or os.getenv('NEO4J_PASSWORD')
+        
+        if not password:
+            click.echo("Neo4j backend requires NEO4J_PASSWORD environment variable or --neo4j-password option")
             sys.exit(1)
+            
         backend_kwargs = {
-            'uri': neo4j_uri,
-            'username': neo4j_user,
-            'password': neo4j_password
+            'uri': uri,
+            'username': user,
+            'password': password
         }
     
     return SchemaAnalyzer(connection, backend=backend, **backend_kwargs)
@@ -43,9 +51,9 @@ def _create_analyzer(connection: str, backend: str = 'networkx',
 
 def backend_options(f):
     """Decorator to add backend options to commands."""
-    f = click.option('--neo4j-password', help='Neo4j password')(f)
-    f = click.option('--neo4j-user', help='Neo4j username')(f)
-    f = click.option('--neo4j-uri', help='Neo4j connection URI')(f)
+    f = click.option('--neo4j-password', help='Neo4j password (overrides NEO4J_PASSWORD env var)')(f)
+    f = click.option('--neo4j-user', help='Neo4j username (overrides NEO4J_USER env var)')(f)
+    f = click.option('--neo4j-uri', help='Neo4j connection URI (overrides NEO4J_URI env var)')(f)
     f = click.option('--backend', '-b', default='networkx', help='Graph backend (networkx, neo4j)')(f)
     f = click.option('--include-views/--exclude-views', default=True, help='Include database views in analysis')(f)
     return f
@@ -60,13 +68,19 @@ def main(verbose: bool) -> None:
 
 
 @main.command()
-@click.option('--connection', '-c', required=True, help='Database connection string')
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
 @click.option('--output', '-o', help='Output file for graph data (JSON)')
 @backend_options
 def analyze(connection: str, output: Optional[str], backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
     """Analyze database schema and build knowledge graph."""
     try:
-        analyzer = _create_analyzer(connection, backend, neo4j_uri, neo4j_user, neo4j_password)
+        # Use DATABASE_URL from environment if connection not provided
+        connection_final = connection or os.getenv('DATABASE_URL')
+        if not connection_final:
+            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
+            sys.exit(1)
+            
+        analyzer = _create_analyzer(connection_final, backend, neo4j_uri, neo4j_user, neo4j_password)
         click.echo(f"Analyzing database schema using {backend} backend...")
         
         analyzer.analyze_schema(include_views=include_views)
@@ -115,7 +129,7 @@ def analyze(connection: str, output: Optional[str], backend: str, neo4j_uri: str
 
 
 @main.command()
-@click.option('--connection', '-c', required=True, help='Database connection string')
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
 @click.option('--keywords', '-k', required=True, help='Comma-separated keywords to search for')
 @click.option('--max-tables', '-m', default=10, help='Maximum number of tables to return')
 @click.option('--include-related', '-r', is_flag=True, help='Include related tables in results')
@@ -123,7 +137,13 @@ def analyze(connection: str, output: Optional[str], backend: str, neo4j_uri: str
 def find_tables(connection: str, keywords: str, max_tables: int, include_related: bool, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
     """Find relevant tables based on keywords."""
     try:
-        analyzer = _create_analyzer(connection, backend, neo4j_uri, neo4j_user, neo4j_password)
+        # Use DATABASE_URL from environment if connection not provided
+        connection_final = connection or os.getenv('DATABASE_URL')
+        if not connection_final:
+            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
+            sys.exit(1)
+            
+        analyzer = _create_analyzer(connection_final, backend, neo4j_uri, neo4j_user, neo4j_password)
         analyzer.analyze_schema(include_views=include_views)
         
         keyword_list = [k.strip() for k in keywords.split(',')]
@@ -169,14 +189,20 @@ def find_tables(connection: str, keywords: str, max_tables: int, include_related
 
 
 @main.command()
-@click.option('--connection', '-c', required=True, help='Database connection string')
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
 @click.option('--tables', '-t', required=True, help='Comma-separated list of base tables')
 @click.option('--max-suggestions', '-m', default=5, help='Maximum number of suggestions')
 @backend_options
 def suggest_joins(connection: str, tables: str, max_suggestions: int, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
     """Suggest tables that could be joined with the given base tables."""
     try:
-        analyzer = _create_analyzer(connection, backend, neo4j_uri, neo4j_user, neo4j_password)
+        # Use DATABASE_URL from environment if connection not provided
+        connection_final = connection or os.getenv('DATABASE_URL')
+        if not connection_final:
+            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
+            sys.exit(1)
+            
+        analyzer = _create_analyzer(connection_final, backend, neo4j_uri, neo4j_user, neo4j_password)
         analyzer.analyze_schema(include_views=include_views)
         
         base_tables = [t.strip() for t in tables.split(',')]
@@ -207,14 +233,20 @@ def suggest_joins(connection: str, tables: str, max_suggestions: int, backend: s
 
 
 @main.command()
-@click.option('--connection', '-c', required=True, help='Database connection string')
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
 @click.option('--output', '-o', default='schema_graph.html', help='Output HTML file')
 @click.option('--layout', '-l', default='spring', help='Graph layout (spring, circular, hierarchical)')
 @backend_options
 def visualize(connection: str, output: str, layout: str, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
     """Generate interactive visualization of the schema graph."""
     try:
-        analyzer = _create_analyzer(connection, backend, neo4j_uri, neo4j_user, neo4j_password)
+        # Use DATABASE_URL from environment if connection not provided
+        connection_final = connection or os.getenv('DATABASE_URL')
+        if not connection_final:
+            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
+            sys.exit(1)
+            
+        analyzer = _create_analyzer(connection_final, backend, neo4j_uri, neo4j_user, neo4j_password)
         analyzer.analyze_schema(include_views=include_views)
         
         click.echo("🎨 Generating visualization...")
@@ -237,12 +269,18 @@ def visualize(connection: str, output: str, layout: str, backend: str, neo4j_uri
 
 
 @main.command()
-@click.option('--connection', '-c', required=True, help='Database connection string')
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
 @backend_options
 def summary(connection: str, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
     """Display summary statistics of the database schema."""
     try:
-        analyzer = _create_analyzer(connection, backend, neo4j_uri, neo4j_user, neo4j_password)
+        # Use DATABASE_URL from environment if connection not provided
+        connection_final = connection or os.getenv('DATABASE_URL')
+        if not connection_final:
+            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
+            sys.exit(1)
+            
+        analyzer = _create_analyzer(connection_final, backend, neo4j_uri, neo4j_user, neo4j_password)
         analyzer.analyze_schema(include_views=include_views)
         
         summary = analyzer.get_schema_summary()
@@ -266,6 +304,121 @@ def summary(connection: str, backend: str, neo4j_uri: str, neo4j_user: str, neo4
         click.echo("\\n🌟 Most Important Tables:")
         for table_info in summary['most_important_tables'][:10]:
             click.echo(f"  • {table_info['table']} (score: {table_info['importance_score']:.3f})")
+        
+        analyzer.close()
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
+@click.option('--include-views/--exclude-views', default=True, help='Include database views in keyword extraction')
+@click.option('--max-concurrent', type=int, help='Maximum concurrent LLM requests (overrides LLM_MAX_CONCURRENT env var)')
+@click.option('--neo4j-uri', help='Neo4j connection URI (overrides NEO4J_URI env var)')
+@click.option('--neo4j-user', help='Neo4j username (overrides NEO4J_USER env var)')
+@click.option('--neo4j-password', help='Neo4j password (overrides NEO4J_PASSWORD env var)')
+def llm_keyword_extraction(connection: str, include_views: bool, max_concurrent: int, neo4j_uri: str, neo4j_user: str, neo4j_password: str) -> None:
+    """Extract business keywords from tables/views using LLM and store in Neo4j."""
+    try:
+        # Use DATABASE_URL from environment if connection not provided
+        connection_final = connection or os.getenv('DATABASE_URL')
+        if not connection_final:
+            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
+            sys.exit(1)
+            
+        # Initialize analyzer with Neo4j backend (required for keyword storage)
+        analyzer = _create_analyzer(connection_final, 'neo4j', neo4j_uri, neo4j_user, neo4j_password)
+        
+        click.echo("🔍 Analyzing database schema...")
+        analyzer.analyze_schema(include_views=include_views)
+        
+        click.echo("🤖 Initializing LLM keyword extractor...")
+        extractor = LLMKeywordExtractor()
+        
+        # Get max_concurrent from environment if not provided
+        max_concurrent_final = max_concurrent or int(os.getenv('LLM_MAX_CONCURRENT', '10'))
+        
+        # Extract keywords for all tables/views using async processing
+        click.echo(f"📝 Extracting keywords from tables and views (max {max_concurrent_final} concurrent requests)...")
+        keyword_results = extractor.extract_keywords_batch_sync(analyzer.tables, include_views=include_views, max_concurrent=max_concurrent_final)
+        
+        # Store keywords in Neo4j
+        click.echo("💾 Storing keywords in Neo4j...")
+        stored_count = 0
+        for result in keyword_results:
+            if result.keywords or result.business_concepts:
+                analyzer.backend.add_keywords_to_table(
+                    result.table_name,
+                    result.keywords,
+                    result.business_concepts
+                )
+                stored_count += 1
+                
+                # Show progress
+                if stored_count % 10 == 0:
+                    click.echo(f"  Stored keywords for {stored_count} entities...")
+        
+        click.echo(f"✅ Keyword extraction complete!")
+        click.echo(f"📊 Processed {len(keyword_results)} entities")
+        click.echo(f"💾 Stored keywords for {stored_count} entities")
+        
+        # Show some statistics
+        total_keywords = sum(len(r.keywords) for r in keyword_results)
+        total_concepts = sum(len(r.business_concepts) for r in keyword_results)
+        click.echo(f"🏷️  Total keywords extracted: {total_keywords}")
+        click.echo(f"🏢 Total business concepts: {total_concepts}")
+        
+        analyzer.close()
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
+@click.option('--query', '-q', required=True, help='Natural language query to find relevant tables')
+@click.option('--max-results', '-m', default=10, help='Maximum number of results to return')
+@click.option('--neo4j-uri', help='Neo4j connection URI (overrides NEO4J_URI env var)')
+@click.option('--neo4j-user', help='Neo4j username (overrides NEO4J_USER env var)')
+@click.option('--neo4j-password', help='Neo4j password (overrides NEO4J_PASSWORD env var)')
+def find_tables_semantic(connection: str, query: str, max_results: int, neo4j_uri: str, neo4j_user: str, neo4j_password: str) -> None:
+    """Find relevant tables using semantic keyword matching."""
+    try:
+        # Use DATABASE_URL from environment if connection not provided
+        connection_final = connection or os.getenv('DATABASE_URL')
+        if not connection_final:
+            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
+            sys.exit(1)
+            
+        # Initialize analyzer with Neo4j backend (required for semantic search)
+        analyzer = _create_analyzer(connection_final, 'neo4j', neo4j_uri, neo4j_user, neo4j_password)
+        
+        click.echo(f"🔍 Searching for tables related to: '{query}'")
+        
+        # Extract keywords from the user query (simple word splitting)
+        search_keywords = [word.strip().lower() for word in query.replace(',', ' ').split() if len(word.strip()) > 2]
+        
+        # Search using Neo4j semantic matching
+        results = analyzer.backend.find_tables_by_keywords(search_keywords, max_results)
+        
+        if not results:
+            click.echo("❌ No relevant tables found for your query")
+            return
+        
+        click.echo(f"\n📋 Found {len(results)} relevant tables/views:")
+        
+        for i, result in enumerate(results, 1):
+            entity_type = "View" if result['is_view'] else "Table"
+            click.echo(f"\n{i}. {result['table_name']} ({entity_type}) - Score: {result['relevance_score']}")
+            
+            if result['keyword_matches']:
+                click.echo(f"   🏷️  Keyword matches: {', '.join(result['keyword_matches'])}")
+            
+            if result['concept_matches']:
+                click.echo(f"   🏢 Business concept matches: {', '.join(result['concept_matches'])}")
         
         analyzer.close()
         

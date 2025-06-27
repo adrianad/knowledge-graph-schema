@@ -47,14 +47,18 @@ class Neo4jBackend(GraphBackend):
                         columns: $columns,
                         primary_keys: $primary_keys,
                         column_count: $column_count,
-                        is_view: $is_view
+                        is_view: $is_view,
+                        keywords: $keywords,
+                        business_concepts: $business_concepts
                     }})
                 """, {
                     'name': table_name,
                     'columns': [col.name for col in table_info.columns],
                     'primary_keys': [col.name for col in table_info.columns if col.primary_key],
                     'column_count': len(table_info.columns),
-                    'is_view': table_info.is_view
+                    'is_view': table_info.is_view,
+                    'keywords': [],  # Will be populated by LLM extraction
+                    'business_concepts': []  # Will be populated by LLM extraction
                 })
             
             # Create relationships
@@ -242,6 +246,78 @@ class Neo4jBackend(GraphBackend):
         """Close the Neo4j driver connection."""
         if hasattr(self, 'driver'):
             self.driver.close()
+    
+    def add_keywords_to_table(self, table_name: str, keywords: List[str], 
+                              business_concepts: List[str]) -> None:
+        """Add keywords and business concepts to a table/view node."""
+        with self.driver.session() as session:
+            session.run("""
+                MATCH (t {name: $table_name})
+                SET t.keywords = $keywords,
+                    t.business_concepts = $business_concepts
+            """, {
+                'table_name': table_name,
+                'keywords': keywords,
+                'business_concepts': business_concepts
+            })
+    
+    def find_tables_by_keywords(self, search_keywords: List[str], 
+                                max_results: int = 10) -> List[Dict[str, Any]]:
+        """Find tables/views by matching keywords and business concepts."""
+        with self.driver.session() as session:
+            # Convert search keywords to lowercase for matching
+            search_keywords_lower = [kw.lower() for kw in search_keywords]
+            
+            result = session.run("""
+                MATCH (t)
+                WHERE t.name IS NOT NULL
+                WITH t,
+                     [kw IN t.keywords WHERE ANY(search_kw IN $search_keywords 
+                                                WHERE toLower(kw) CONTAINS toLower(search_kw))] as keyword_matches,
+                     [bc IN t.business_concepts WHERE ANY(search_kw IN $search_keywords 
+                                                         WHERE toLower(bc) CONTAINS toLower(search_kw))] as concept_matches
+                WHERE size(keyword_matches) > 0 OR size(concept_matches) > 0
+                RETURN t.name as table_name,
+                       t.is_view as is_view,
+                       keyword_matches,
+                       concept_matches,
+                       (size(keyword_matches) + size(concept_matches) * 2) as relevance_score
+                ORDER BY relevance_score DESC
+                LIMIT $max_results
+            """, {
+                'search_keywords': search_keywords_lower,
+                'max_results': max_results
+            })
+            
+            return [
+                {
+                    'table_name': record['table_name'],
+                    'is_view': record['is_view'],
+                    'keyword_matches': record['keyword_matches'],
+                    'concept_matches': record['concept_matches'],
+                    'relevance_score': record['relevance_score']
+                }
+                for record in result
+            ]
+    
+    def get_all_keywords(self) -> Dict[str, Dict[str, List[str]]]:
+        """Get all keywords and business concepts for debugging/analysis."""
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (t)
+                WHERE t.name IS NOT NULL
+                RETURN t.name as table_name,
+                       t.keywords as keywords,
+                       t.business_concepts as business_concepts
+            """)
+            
+            return {
+                record['table_name']: {
+                    'keywords': record['keywords'] or [],
+                    'business_concepts': record['business_concepts'] or []
+                }
+                for record in result
+            }
     
     def __del__(self):
         """Cleanup when object is destroyed."""
