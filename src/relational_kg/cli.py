@@ -23,6 +23,33 @@ logging.basicConfig(
 )
 
 
+def _create_analyzer(connection: str, backend: str = 'networkx', 
+                    neo4j_uri: str = None, neo4j_user: str = None, 
+                    neo4j_password: str = None) -> SchemaAnalyzer:
+    """Create analyzer with specified backend."""
+    backend_kwargs = {}
+    if backend == 'neo4j':
+        if not all([neo4j_uri, neo4j_user, neo4j_password]):
+            click.echo("Neo4j backend requires --neo4j-uri, --neo4j-user, and --neo4j-password")
+            sys.exit(1)
+        backend_kwargs = {
+            'uri': neo4j_uri,
+            'username': neo4j_user,
+            'password': neo4j_password
+        }
+    
+    return SchemaAnalyzer(connection, backend=backend, **backend_kwargs)
+
+
+def backend_options(f):
+    """Decorator to add backend options to commands."""
+    f = click.option('--neo4j-password', help='Neo4j password')(f)
+    f = click.option('--neo4j-user', help='Neo4j username')(f)
+    f = click.option('--neo4j-uri', help='Neo4j connection URI')(f)
+    f = click.option('--backend', '-b', default='networkx', help='Graph backend (networkx, neo4j)')(f)
+    return f
+
+
 @click.group()
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose logging')
 def main(verbose: bool) -> None:
@@ -34,11 +61,12 @@ def main(verbose: bool) -> None:
 @main.command()
 @click.option('--connection', '-c', required=True, help='Database connection string')
 @click.option('--output', '-o', help='Output file for graph data (JSON)')
-def analyze(connection: str, output: Optional[str]) -> None:
+@backend_options
+def analyze(connection: str, output: Optional[str], backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str) -> None:
     """Analyze database schema and build knowledge graph."""
     try:
-        analyzer = SchemaAnalyzer(connection)
-        click.echo("Analyzing database schema...")
+        analyzer = _create_analyzer(connection, backend, neo4j_uri, neo4j_user, neo4j_password)
+        click.echo(f"Analyzing database schema using {backend} backend...")
         
         analyzer.analyze_schema()
         
@@ -57,10 +85,13 @@ def analyze(connection: str, output: Optional[str]) -> None:
         
         # Save graph data if requested
         if output:
-            graph_data = analyzer.graph.export_graph_data()
-            with open(output, 'w') as f:
-                json.dump(graph_data, f, indent=2)
-            click.echo(f"💾 Graph data saved to {output}")
+            if hasattr(analyzer.backend, 'export_graph_data'):
+                graph_data = analyzer.backend.export_graph_data()
+                with open(output, 'w') as f:
+                    json.dump(graph_data, f, indent=2)
+                click.echo(f"💾 Graph data saved to {output}")
+            else:
+                click.echo("⚠️  Graph data export not supported for this backend")
         
         analyzer.close()
         
@@ -74,10 +105,11 @@ def analyze(connection: str, output: Optional[str]) -> None:
 @click.option('--keywords', '-k', required=True, help='Comma-separated keywords to search for')
 @click.option('--max-tables', '-m', default=10, help='Maximum number of tables to return')
 @click.option('--include-related', '-r', is_flag=True, help='Include related tables in results')
-def find_tables(connection: str, keywords: str, max_tables: int, include_related: bool) -> None:
+@backend_options
+def find_tables(connection: str, keywords: str, max_tables: int, include_related: bool, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str) -> None:
     """Find relevant tables based on keywords."""
     try:
-        analyzer = SchemaAnalyzer(connection)
+        analyzer = _create_analyzer(connection, backend, neo4j_uri, neo4j_user, neo4j_password)
         analyzer.analyze_schema()
         
         keyword_list = [k.strip() for k in keywords.split(',')]
@@ -126,10 +158,11 @@ def find_tables(connection: str, keywords: str, max_tables: int, include_related
 @click.option('--connection', '-c', required=True, help='Database connection string')
 @click.option('--tables', '-t', required=True, help='Comma-separated list of base tables')
 @click.option('--max-suggestions', '-m', default=5, help='Maximum number of suggestions')
-def suggest_joins(connection: str, tables: str, max_suggestions: int) -> None:
+@backend_options
+def suggest_joins(connection: str, tables: str, max_suggestions: int, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str) -> None:
     """Suggest tables that could be joined with the given base tables."""
     try:
-        analyzer = SchemaAnalyzer(connection)
+        analyzer = _create_analyzer(connection, backend, neo4j_uri, neo4j_user, neo4j_password)
         analyzer.analyze_schema()
         
         base_tables = [t.strip() for t in tables.split(',')]
@@ -163,16 +196,21 @@ def suggest_joins(connection: str, tables: str, max_suggestions: int) -> None:
 @click.option('--connection', '-c', required=True, help='Database connection string')
 @click.option('--output', '-o', default='schema_graph.html', help='Output HTML file')
 @click.option('--layout', '-l', default='spring', help='Graph layout (spring, circular, hierarchical)')
-def visualize(connection: str, output: str, layout: str) -> None:
+@backend_options
+def visualize(connection: str, output: str, layout: str, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str) -> None:
     """Generate interactive visualization of the schema graph."""
     try:
-        analyzer = SchemaAnalyzer(connection)
+        analyzer = _create_analyzer(connection, backend, neo4j_uri, neo4j_user, neo4j_password)
         analyzer.analyze_schema()
         
         click.echo("🎨 Generating visualization...")
         
-        visualizer = GraphVisualizer(analyzer.graph)
-        visualizer.create_interactive_plot(output, layout_type=layout)
+        if backend == 'networkx' and hasattr(analyzer.backend, 'schema_graph'):
+            visualizer = GraphVisualizer(analyzer.backend.schema_graph)
+            visualizer.create_interactive_plot(output, layout_type=layout)
+        else:
+            click.echo("⚠️  Visualization currently only supports NetworkX backend")
+            return
         
         click.echo(f"✅ Visualization saved to {output}")
         click.echo(f"🌐 Open {output} in your browser to view the interactive graph")
@@ -186,10 +224,11 @@ def visualize(connection: str, output: str, layout: str) -> None:
 
 @main.command()
 @click.option('--connection', '-c', required=True, help='Database connection string')
-def summary(connection: str) -> None:
+@backend_options
+def summary(connection: str, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str) -> None:
     """Display summary statistics of the database schema."""
     try:
-        analyzer = SchemaAnalyzer(connection)
+        analyzer = _create_analyzer(connection, backend, neo4j_uri, neo4j_user, neo4j_password)
         analyzer.analyze_schema()
         
         summary = analyzer.get_schema_summary()

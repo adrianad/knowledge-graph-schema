@@ -1,0 +1,56 @@
+from typing import Dict, List, Set, Any, Optional
+import logging
+
+from .base import GraphBackend
+from ..graph import SchemaGraph
+from ..database import TableInfo
+
+
+class NetworkXBackend(GraphBackend):
+    """NetworkX-based graph backend implementation."""
+    
+    def __init__(self):
+        """Initialize NetworkX backend."""
+        self.schema_graph = SchemaGraph()
+        self.logger = logging.getLogger(__name__)
+    
+    def build_from_schema(self, tables: Dict[str, TableInfo]) -> None:
+        """Build the graph from database schema tables."""
+        self.schema_graph.build_from_schema(tables)
+    
+    def find_related_tables(self, table_name: str, max_distance: int = 2) -> Set[str]:
+        """Find tables related to the given table within max_distance hops."""
+        return self.schema_graph.find_related_tables(table_name, max_distance)
+    
+    def find_table_clusters(self) -> List[Set[str]]:
+        """Find clusters/communities of related tables."""
+        return self.schema_graph.find_table_clusters()
+    
+    def get_table_importance(self) -> Dict[str, float]:
+        """Get importance scores for all tables."""
+        return self.schema_graph.get_table_importance()
+    
+    def find_shortest_path(self, source: str, target: str) -> Optional[List[str]]:
+        """Find shortest path between two tables."""
+        return self.schema_graph.find_shortest_path(source, target)
+    
+    def get_table_neighbors(self, table_name: str) -> Set[str]:
+        """Get direct neighbors of a table."""
+        neighbors_dict = self.schema_graph.get_table_neighbors(table_name)
+        return set(neighbors_dict['predecessors'] + neighbors_dict['successors'])
+    
+    def get_all_tables(self) -> Set[str]:
+        """Get all table names in the graph."""
+        return set(self.schema_graph.graph.nodes())
+    
+    def get_graph_stats(self) -> Dict[str, Any]:
+        """Get graph statistics (nodes, edges, etc.)."""
+        return self.schema_graph.get_statistics()
+    
+    def export_graph_data(self) -> Dict[str, Any]:
+        """Export graph structure as JSON-serializable data."""
+        return self.schema_graph.export_graph_data()
+    
+    def save_to_file(self, filepath: str) -> None:
+        """Save graph data to JSON file."""
+        self.schema_graph.save_to_file(filepath)

@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 
 from .database import DatabaseExtractor, TableInfo
-from .graph import SchemaGraph
+from .backends.base import GraphBackend
 
 
 @dataclass
@@ -19,12 +19,24 @@ class TableRelevanceScore:
 class SchemaAnalyzer:
     """Analyze database schema and provide intelligent table suggestions."""
     
-    def __init__(self, connection_string: str):
-        """Initialize analyzer with database connection."""
+    def __init__(self, connection_string: str, backend: str = 'networkx', **backend_kwargs):
+        """Initialize analyzer with database connection and specified backend."""
         self.extractor = DatabaseExtractor(connection_string)
-        self.graph = SchemaGraph()
         self.logger = logging.getLogger(__name__)
         self._connected = False
+        self.tables: Dict[str, TableInfo] = {}
+        
+        # Initialize the appropriate backend
+        if backend == 'networkx':
+            from .backends.networkx_backend import NetworkXBackend
+            self.backend = NetworkXBackend()
+        elif backend == 'neo4j':
+            from .backends.neo4j_backend import Neo4jBackend
+            self.backend = Neo4jBackend(**backend_kwargs)
+        else:
+            raise ValueError(f"Unknown backend: {backend}")
+        
+        self.logger.info(f"Initialized SchemaAnalyzer with {backend} backend")
     
     def analyze_schema(self) -> None:
         """Analyze database schema and build knowledge graph."""
@@ -32,10 +44,10 @@ class SchemaAnalyzer:
         self._connected = True
         
         # Extract schema information
-        tables = self.extractor.extract_schema()
+        self.tables = self.extractor.extract_schema()
         
-        # Build knowledge graph
-        self.graph.build_from_schema(tables)
+        # Build knowledge graph using backend
+        self.backend.build_from_schema(self.tables)
         
         self.logger.info("Schema analysis completed")
     
@@ -50,7 +62,7 @@ class SchemaAnalyzer:
         
         scores = {}
         
-        for table_name in self.graph.tables:
+        for table_name in self.tables:
             score, reasons = self._calculate_table_relevance(table_name, keywords)
             if score > 0:
                 scores[table_name] = TableRelevanceScore(
@@ -72,7 +84,7 @@ class SchemaAnalyzer:
         score = 0.0
         reasons = []
         
-        table_info = self.graph.tables[table_name]
+        table_info = self.tables[table_name]
         
         # Check table name matches
         for keyword in keywords:
@@ -106,7 +118,7 @@ class SchemaAnalyzer:
             raise RuntimeError("Schema not analyzed. Call analyze_schema() first.")
         
         # Find tables within distance 2
-        related = self.graph.find_related_tables(table_name, max_distance=2)
+        related = self.backend.find_related_tables(table_name, max_distance=2)
         related.add(table_name)  # Include the original table
         
         return related
@@ -123,17 +135,16 @@ class SchemaAnalyzer:
         suggestions = set()
         
         for table in base_tables:
-            if table in self.graph.graph:
+            if table in self.backend.get_all_tables():
                 # Get neighbors (direct relationships)
-                neighbors = self.graph.get_table_neighbors(table)
-                suggestions.update(neighbors['predecessors'])
-                suggestions.update(neighbors['successors'])
+                neighbors = self.backend.get_table_neighbors(table)
+                suggestions.update(neighbors)
         
         # Remove base tables from suggestions
         suggestions = suggestions - set(base_tables)
         
         # Score suggestions by importance
-        importance_scores = self.graph.get_table_importance()
+        importance_scores = self.backend.get_table_importance()
         
         # Sort by importance and return top suggestions
         sorted_suggestions = sorted(
@@ -149,16 +160,16 @@ class SchemaAnalyzer:
         if not self._connected:
             raise RuntimeError("Schema not analyzed. Call analyze_schema() first.")
         
-        return self.graph.find_shortest_path(table1, table2)
+        return self.backend.find_shortest_path(table1, table2)
     
     def get_schema_summary(self) -> Dict[str, Any]:
         """Get summary of the database schema."""
         if not self._connected:
             raise RuntimeError("Schema not analyzed. Call analyze_schema() first.")
         
-        stats = self.graph.get_statistics()
-        clusters = self.graph.find_table_clusters()
-        importance = self.graph.get_table_importance()
+        stats = self.backend.get_graph_stats()
+        clusters = self.backend.find_table_clusters()
+        importance = self.backend.get_table_importance()
         
         # Find most important tables
         top_tables = sorted(
@@ -168,7 +179,7 @@ class SchemaAnalyzer:
         )[:10]
         
         return {
-            'total_tables': len(self.graph.tables),
+            'total_tables': len(self.tables),
             'graph_statistics': stats,
             'table_clusters': [list(cluster) for cluster in clusters],
             'most_important_tables': [
@@ -186,7 +197,7 @@ class SchemaAnalyzer:
         subset = {}
         for table_name in table_names:
             if table_name in self.graph.tables:
-                table_info = self.graph.tables[table_name]
+                table_info = self.tables[table_name]
                 subset[table_name] = {
                     'columns': [
                         {
@@ -199,7 +210,7 @@ class SchemaAnalyzer:
                         for col in table_info.columns
                     ],
                     'foreign_keys': table_info.foreign_keys,
-                    'relationships': self.graph.get_table_neighbors(table_name)
+                    'relationships': list(self.backend.get_table_neighbors(table_name))
                 }
         
         return subset

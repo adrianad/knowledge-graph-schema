@@ -7,7 +7,7 @@ name = "relational-knowledge-graph"
 version = "0.1.0"
 description = "Database schema knowledge graph for LLM-assisted SQL generation"
 authors = [
-    {name = "Adrian", email = ""}
+    {name = "Adrian"}
 ]
 requires-python = ">=3.11"
 dependencies = [
@@ -20,6 +20,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "click>=8.1.0",
     "pandas>=2.1.0",
+    "scipy>=1.11.0",
+    "neo4j>=5.0.0",
 ]
 
 [tool.setuptools.packages.find]
