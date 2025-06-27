@@ -123,25 +123,34 @@ class LLMKeywordExtractor:
         
         prompt = f"""/no_think
 
-Analyze this database {entity_type} and extract relevant keywords and business concepts:
+Convert these database field names into plain English keywords that a non-technical person would use to search for this information:
 
 {table_context}
 
-Extract keywords in two categories:
+Your task: Transform technical database terms into plain language search terms that business users would naturally type when looking for this data.
 
-1. TECHNICAL KEYWORDS: Direct terms from table/column names, data types, relationships
-2. BUSINESS CONCEPTS: Higher-level business domain terms this {entity_type} represents
+Examples of good transformations:
+- "user_id" → "user", "person", "account"
+- "order_date" → "order", "purchase", "date", "when"
+- "total_amount" → "total", "cost", "price", "amount"
+- "supplier_name" → "supplier", "vendor", "company"
 
 Rules:
-- Focus on business meaning, not technical implementation
-- Include domain-specific terminology 
-- Consider what business processes this {entity_type} supports
-- Extract 5-15 keywords total
-- Separate technical vs business concepts
+1. Extract MAXIMUM 20 keywords total
+2. Focus on what non-technical users would search for
+3. Include both specific terms and general concepts
+4. Convert technical jargon to everyday language
+5. Think about business processes this {entity_type} supports
+6. Include synonyms that users might type
+
+Extract keywords in two categories:
+
+SEARCH_TERMS: Plain language words users would type (e.g., "customer", "order", "payment")
+BUSINESS_CONCEPTS: Higher-level business areas (e.g., "sales", "inventory", "accounting")
 
 Format your response as:
-TECHNICAL: keyword1, keyword2, keyword3
-BUSINESS: concept1, concept2, concept3"""
+SEARCH_TERMS: term1, term2, term3, term4, term5
+BUSINESS_CONCEPTS: concept1, concept2, concept3"""
         
         return prompt
     
@@ -156,21 +165,34 @@ BUSINESS: concept1, concept2, concept3"""
             
             for line in lines:
                 line = line.strip()
-                if line.startswith('TECHNICAL:'):
-                    technical_keywords = line.replace('TECHNICAL:', '').strip()
-                    keywords.extend([kw.strip() for kw in technical_keywords.split(',') if kw.strip()])
-                elif line.startswith('BUSINESS:'):
-                    business_keywords = line.replace('BUSINESS:', '').strip()  
+                if line.startswith('SEARCH_TERMS:'):
+                    search_terms = line.replace('SEARCH_TERMS:', '').strip()
+                    keywords.extend([kw.strip() for kw in search_terms.split(',') if kw.strip()])
+                elif line.startswith('BUSINESS_CONCEPTS:'):
+                    business_keywords = line.replace('BUSINESS_CONCEPTS:', '').strip()  
                     business_concepts.extend([kw.strip() for kw in business_keywords.split(',') if kw.strip()])
             
             # Clean up keywords - remove empty strings and duplicates
-            keywords = list(set([kw for kw in keywords if kw]))
-            business_concepts = list(set([bc for bc in business_concepts if bc]))
+            keywords = list(set([kw.lower() for kw in keywords if kw.strip()]))
+            business_concepts = list(set([bc.lower() for bc in business_concepts if bc.strip()]))
+            
+            # Enforce maximum of 20 keywords total
+            total_keywords = keywords + business_concepts
+            if len(total_keywords) > 20:
+                # Keep the first 15 search terms and 5 business concepts
+                keywords = keywords[:15]
+                business_concepts = business_concepts[:5]
+                self.logger.info(f"Truncated keywords for {table_name} to 20 total (was {len(total_keywords)})")
             
             # Adjust confidence based on number of extracted keywords
-            if len(keywords) + len(business_concepts) > 5:
+            total_count = len(keywords) + len(business_concepts)
+            if total_count >= 10:
                 confidence = 0.9
-            elif len(keywords) + len(business_concepts) < 3:
+            elif total_count >= 5:
+                confidence = 0.8
+            elif total_count >= 3:
+                confidence = 0.7
+            else:
                 confidence = 0.6
                 
         except Exception as e:
