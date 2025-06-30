@@ -835,6 +835,172 @@ class Neo4jBackend(GraphBackend):
                 })
             
             return tables
+    
+    def get_table_details(self, table_names: List[str], detailed: bool = True, connection_string: str = None) -> List[Dict[str, Any]]:
+        """Get detailed information for specific tables directly from Neo4j."""
+        # If detailed mode, extract schema once for all tables
+        all_tables_schema = {}
+        if detailed and connection_string:
+            try:
+                from ..database import DatabaseExtractor
+                db_extractor = DatabaseExtractor(connection_string)
+                db_extractor.connect()
+                all_tables_schema = db_extractor.extract_schema(include_views=True)
+                db_extractor.close()
+                self.logger.info(f"Extracted schema for {len(all_tables_schema)} tables/views for detailed mode")
+            except Exception as e:
+                self.logger.warning(f"Failed to extract database schema for detailed mode: {e}")
+        
+        with self.driver.session() as session:
+            # Get information for specified tables
+            result = session.run("""
+                MATCH (t)
+                WHERE t.name IN $table_names
+                RETURN t.name as name,
+                       t.columns as columns,
+                       t.primary_keys as primary_keys,
+                       t.is_view as is_view,
+                       t.keywords as keywords,
+                       t.business_concepts as business_concepts
+                ORDER BY t.name
+            """, table_names=table_names)
+            
+            tables = []
+            found_tables = set()
+            
+            for record in result:
+                found_tables.add(record['name'])
+                
+                # Get foreign key information for this table
+                fk_result = session.run("""
+                    MATCH (source {name: $table_name})-[r:REFERENCES]->(target)
+                    RETURN r.foreign_key_columns as constrained_columns,
+                           target.name as target_table
+                """, table_name=record['name'])
+                
+                foreign_keys = []
+                for fk_record in fk_result:
+                    foreign_keys.append({
+                        'constrained_columns': fk_record['constrained_columns'] or [],
+                        'referred_table': fk_record['target_table'],
+                        'referred_columns': []  # Not stored in current schema
+                    })
+                
+                # Build column information
+                columns = []
+                column_names = record['columns'] or []
+                primary_keys = record['primary_keys'] or []
+                
+                if detailed and all_tables_schema:
+                    # Use pre-extracted schema data
+                    table_schema = all_tables_schema.get(record['name'])
+                    if table_schema:
+                        # Use actual column information from database
+                        for col_info in table_schema.columns:
+                            columns.append({
+                                'name': col_info.name,
+                                'type': str(col_info.type),
+                                'nullable': col_info.nullable,
+                                'primary_key': col_info.primary_key,
+                                'foreign_key': col_info.foreign_key
+                            })
+                    else:
+                        # Fallback to basic info if table not found
+                        for col_name in column_names:
+                            columns.append({
+                                'name': col_name,
+                                'type': 'NOT FOUND',
+                                'nullable': True,
+                                'primary_key': col_name in primary_keys,
+                                'foreign_key': None
+                            })
+                elif detailed:
+                    # Detailed mode but no connection string provided
+                    for col_name in column_names:
+                        columns.append({
+                            'name': col_name,
+                            'type': 'NO_CONNECTION',
+                            'nullable': True,
+                            'primary_key': col_name in primary_keys,
+                            'foreign_key': None
+                        })
+                else:
+                    # Basic mode - just column names and primary key info
+                    for col_name in column_names:
+                        columns.append({
+                            'name': col_name,
+                            'primary_key': col_name in primary_keys
+                        })
+                
+                tables.append({
+                    'name': record['name'],
+                    'is_view': record['is_view'] or False,
+                    'columns': columns,
+                    'foreign_keys': foreign_keys
+                })
+            
+            # Check for tables that weren't found
+            missing_tables = set(table_names) - found_tables
+            if missing_tables:
+                self.logger.warning(f"Tables not found in Neo4j: {sorted(missing_tables)}")
+                
+                # Add placeholder entries for missing tables
+                for missing_table in sorted(missing_tables):
+                    tables.append({
+                        'name': missing_table,
+                        'is_view': False,
+                        'columns': [],
+                        'foreign_keys': [],
+                        'not_found': True
+                    })
+            
+            return tables
+    
+    def get_tables_for_keyword_extraction(self, connection_string: str, include_views: bool = True) -> Dict[str, Any]:
+        """Get tables that need keyword extraction and their detailed schema information."""
+        from ..database import DatabaseExtractor
+        
+        # Get table names from Neo4j that don't have keywords yet
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (t)
+                WHERE t.name IS NOT NULL 
+                AND (t.keywords IS NULL OR size(t.keywords) = 0)
+                AND ($include_views = true OR t.is_view = false)
+                RETURN t.name as name, t.is_view as is_view
+                ORDER BY t.name
+            """, include_views=include_views)
+            
+            tables_needing_keywords = []
+            for record in result:
+                tables_needing_keywords.append({
+                    'name': record['name'],
+                    'is_view': record['is_view'] or False
+                })
+        
+        if not tables_needing_keywords:
+            self.logger.info("All tables already have keywords extracted")
+            return {}
+        
+        self.logger.info(f"Found {len(tables_needing_keywords)} tables needing keyword extraction")
+        
+        # Extract detailed schema for only those tables
+        db_extractor = DatabaseExtractor(connection_string)
+        db_extractor.connect()
+        all_tables_schema = db_extractor.extract_schema(include_views=include_views)
+        db_extractor.close()
+        
+        # Filter to only tables that need keywords
+        tables_for_extraction = {}
+        for table_info in tables_needing_keywords:
+            table_name = table_info['name']
+            if table_name in all_tables_schema:
+                tables_for_extraction[table_name] = all_tables_schema[table_name]
+            else:
+                self.logger.warning(f"Table {table_name} found in Neo4j but not in database schema")
+        
+        self.logger.info(f"Prepared {len(tables_for_extraction)} tables for keyword extraction")
+        return tables_for_extraction
 
     def __del__(self):
         """Cleanup when object is destroyed."""

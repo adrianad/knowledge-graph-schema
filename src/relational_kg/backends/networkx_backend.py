@@ -72,3 +72,13 @@ class NetworkXBackend(GraphBackend):
         """Get detailed table information for a specific cluster."""
         # NetworkX doesn't persistently store clusters, so return empty list
         return []
+    
+    def get_table_details(self, table_names: List[str], detailed: bool = True, connection_string: str = None) -> List[Dict[str, Any]]:
+        """Get detailed information for specific tables."""
+        # NetworkX doesn't have persistent table storage, so return empty list
+        return []
+    
+    def get_tables_for_keyword_extraction(self, connection_string: str, include_views: bool = True) -> Dict[str, Any]:
+        """Get tables that need keyword extraction and their detailed schema information."""
+        # NetworkX doesn't have persistent keyword storage, so return empty dict
+        return {}

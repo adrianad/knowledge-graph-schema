@@ -347,8 +347,14 @@ def llm_keyword_extraction(connection: str, include_views: bool, max_concurrent:
         # Initialize analyzer with Neo4j backend (required for keyword storage)
         analyzer = _create_analyzer(connection_final, 'neo4j', neo4j_uri, neo4j_user, neo4j_password)
         
-        click.echo("🔍 Analyzing database schema...")
-        analyzer.analyze_schema(include_views=include_views)
+        click.echo("🔍 Getting tables needing keyword extraction from Neo4j...")
+        tables_for_extraction = analyzer.backend.get_tables_for_keyword_extraction(connection_final, include_views)
+        
+        if not tables_for_extraction:
+            click.echo("✅ All tables already have keywords extracted!")
+            return
+        
+        click.echo(f"📝 Found {len(tables_for_extraction)} tables needing keyword extraction")
         
         click.echo("🤖 Initializing LLM keyword extractor...")
         extractor = LLMKeywordExtractor()
@@ -356,9 +362,9 @@ def llm_keyword_extraction(connection: str, include_views: bool, max_concurrent:
         # Get max_concurrent from environment if not provided
         max_concurrent_final = max_concurrent or int(os.getenv('LLM_MAX_CONCURRENT', '10'))
         
-        # Extract keywords for all tables/views using async processing
-        click.echo(f"📝 Extracting keywords from tables and views (max {max_concurrent_final} concurrent requests)...")
-        keyword_results = extractor.extract_keywords_batch_sync(analyzer.tables, include_views=include_views, max_concurrent=max_concurrent_final)
+        # Extract keywords for filtered tables using async processing
+        click.echo(f"📝 Extracting keywords from {len(tables_for_extraction)} tables/views (max {max_concurrent_final} concurrent requests)...")
+        keyword_results = extractor.extract_keywords_batch_sync(tables_for_extraction, include_views=include_views, max_concurrent=max_concurrent_final)
         
         # Store keywords in Neo4j
         click.echo("💾 Storing keywords in Neo4j...")
@@ -395,12 +401,11 @@ def llm_keyword_extraction(connection: str, include_views: bool, max_concurrent:
 
 @main.command()
 @click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
-@click.option('--table', '-t', required=True, help='Table name to explore relationships from')
-@click.option('--hops', '-h', default=2, help='Number of relationship hops to explore (default: 2)')
-@click.option('--show-views/--hide-views', default=False, help='Show views in the relationship exploration results')
+@click.option('--table', '-t', multiple=True, required=True, help='Table name(s) to get details for (can be used multiple times)')
+@click.option('--detailed/--basic', default=True, help='Show detailed column information including data types')
 @backend_options
-def explore_table(connection: str, table: str, hops: int, show_views: bool, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
-    """Explore all relationships from a specific table within N hops."""
+def explore_table(connection: str, table: tuple, detailed: bool, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
+    """Get detailed information about specific tables from existing Neo4j graph."""
     try:
         # Use DATABASE_URL from environment if connection not provided
         connection_final = connection or os.getenv('DATABASE_URL')
@@ -408,77 +413,72 @@ def explore_table(connection: str, table: str, hops: int, show_views: bool, back
             click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
             sys.exit(1)
             
+        # Process table names (handle comma-separated input)
+        table_names = []
+        for t in table:
+            if ',' in t:
+                table_names.extend([name.strip() for name in t.split(',') if name.strip()])
+            else:
+                table_names.append(t.strip())
+        
+        if not table_names:
+            click.echo("❌ No table names provided", err=True)
+            sys.exit(1)
+            
         analyzer = _create_analyzer(connection_final, backend, neo4j_uri, neo4j_user, neo4j_password)
-        analyzer.analyze_schema(include_views=include_views)
         
-        click.echo(f"🔍 Exploring relationships from table '{table}' within {hops} hops...")
+        click.echo(f"🔍 Getting details for {len(table_names)} table(s) from existing Neo4j graph...")
         
-        # Check if table exists
-        if table not in analyzer.tables:
-            click.echo(f"❌ Table '{table}' not found in database schema")
-            available_tables = [t for t in analyzer.tables.keys() if not analyzer.tables[t].is_view]
-            if available_tables:
-                click.echo(f"💡 Available tables: {', '.join(sorted(available_tables)[:10])}{'...' if len(available_tables) > 10 else ''}")
+        # Get table details directly from Neo4j (no schema rebuilding)
+        tables = analyzer.backend.get_table_details(table_names, detailed, connection_final if detailed else None)
+        
+        if not tables:
+            click.echo("❌ No tables found in Neo4j graph")
+            click.echo("💡 Make sure you have run 'rkg analyze' to build the graph first")
             return
         
-        # Get related tables within specified hops
-        related_tables = analyzer.backend.find_related_tables(table, max_distance=hops)
+        # Separate found tables and missing tables
+        found_tables = [t for t in tables if not t.get('not_found', False)]
+        missing_tables = [t for t in tables if t.get('not_found', False)]
         
-        if not related_tables:
-            click.echo(f"❌ No related tables found within {hops} hops from '{table}'")
+        if missing_tables:
+            click.echo(f"⚠️  Tables not found in Neo4j: {', '.join([t['name'] for t in missing_tables])}")
+            click.echo()
+        
+        if not found_tables:
+            click.echo("❌ None of the specified tables were found in the Neo4j graph")
             return
         
-        # Separate tables and views
-        related_table_names = []
-        related_view_names = []
+        click.echo(f"📋 Found {len(found_tables)} table(s) in Neo4j graph:")
+        click.echo()
         
-        for related_table in related_tables:
-            if related_table in analyzer.tables:
-                if analyzer.tables[related_table].is_view:
-                    related_view_names.append(related_table)
-                else:
-                    related_table_names.append(related_table)
-        
-        # Show results
-        click.echo(f"\\n📋 Found {len(related_tables)} related entities within {hops} hops:")
-        
-        if related_table_names:
-            click.echo(f"\\n🗃️  Related Tables ({len(related_table_names)}):")
-            for i, related_table in enumerate(sorted(related_table_names), 1):
-                # Show connection path (limit to user's hop request)
-                path = analyzer.find_connection_path(table, related_table, max_hops=hops)
-                if path and len(path) > 1:
-                    path_str = " → ".join(path)
-                    click.echo(f"  {i}. {related_table}")
-                    click.echo(f"     Path: {path_str}")
-                else:
-                    click.echo(f"  {i}. {related_table}")
-        
-        if related_view_names and show_views:
-            click.echo(f"\\n👁️  Related Views ({len(related_view_names)}):")
-            for i, related_view in enumerate(sorted(related_view_names), 1):
-                # Show connection path (limit to user's hop request)
-                path = analyzer.find_connection_path(table, related_view, max_hops=hops)
-                if path and len(path) > 1:
-                    path_str = " → ".join(path)
-                    click.echo(f"  {i}. {related_view}")
-                    click.echo(f"     Path: {path_str}")
-                else:
-                    click.echo(f"  {i}. {related_view}")
-        elif related_view_names and not show_views:
-            click.echo(f"\\n👁️  Found {len(related_view_names)} related views (use --show-views to show them)")
-        
-        # Show table details for the source table
-        source_table_info = analyzer.tables[table]
-        click.echo(f"\\n📊 Source Table Details: {table}")
-        click.echo(f"  • Columns: {len(source_table_info.columns)}")
-        click.echo(f"  • Foreign Keys: {len(source_table_info.foreign_keys)}")
-        if source_table_info.foreign_keys:
-            click.echo("  • References:")
-            for fk in source_table_info.foreign_keys:
-                fk_info = f"    - {', '.join(fk['constrained_columns'])} → {fk['referred_table']}"
-                click.echo(fk_info)
-        
+        # Display each table with its details (same format as show-cluster)
+        for table_info in found_tables:
+            table_type = "View" if table_info['is_view'] else "Table"
+            click.echo(f"🗃️  {table_info['name']} ({table_type})")
+            
+            # Show columns
+            if table_info['columns']:
+                click.echo(f"   📊 Columns ({len(table_info['columns'])}):")
+                for col in table_info['columns']:
+                    pk_indicator = " (PK)" if col['primary_key'] else ""
+                    if detailed and 'type' in col:
+                        nullable_indicator = "" if col.get('nullable', True) else " NOT NULL"
+                        fk_indicator = f" -> {col['foreign_key']}" if col.get('foreign_key') else ""
+                        click.echo(f"     • {col['name']}: {col['type']}{nullable_indicator}{pk_indicator}{fk_indicator}")
+                    else:
+                        click.echo(f"     • {col['name']}{pk_indicator}")
+            else:
+                click.echo(f"   📊 No columns found in Neo4j data")
+            
+            # Show foreign keys
+            if table_info['foreign_keys']:
+                click.echo(f"   🔗 Foreign Keys:")
+                for fk in table_info['foreign_keys']:
+                    source_cols = ', '.join(fk['constrained_columns'])
+                    click.echo(f"     • {source_cols} → {fk['referred_table']}")
+            
+            click.echo()
         
         analyzer.close()
         
@@ -510,8 +510,7 @@ def create_clusters(connection: str, method: str, min_size: int, max_hops: int, 
             
         analyzer = _create_analyzer(connection_final, backend, neo4j_uri, neo4j_user, neo4j_password)
         
-        click.echo("🔍 Analyzing database schema...")
-        analyzer.analyze_schema(include_views=include_views)
+        click.echo("🔍 Using existing Neo4j graph data for clustering...")
         
         if method == 'importance':
             click.echo(f"🧮 Calculating importance-based clusters (min_size={min_size}, max_hops={max_hops}, top_pct={top_pct:.1%})...")
