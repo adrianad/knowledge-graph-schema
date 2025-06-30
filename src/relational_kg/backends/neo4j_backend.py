@@ -179,7 +179,7 @@ class Neo4jBackend(GraphBackend):
             communities = community.louvain_communities(graph)
             return [set(c) for c in communities]
     
-    def find_importance_based_clusters(self, min_cluster_size: int = 4, max_hops: int = 2, top_tables_pct: float = 0.2) -> List[Set[str]]:
+    def find_importance_based_clusters(self, min_cluster_size: int = 4, max_hops: int = 2, top_tables_pct: float = 0.2) -> List[tuple]:
         """Find clusters based on most important tables as cores."""
         
         # Get table importance scores
@@ -233,7 +233,7 @@ class Neo4jBackend(GraphBackend):
             
             # Only keep clusters that meet minimum size
             if len(cluster) >= min_cluster_size:
-                clusters.append(cluster)
+                clusters.append((core_table, cluster))
         
         return clusters
     
@@ -523,7 +523,7 @@ class Neo4jBackend(GraphBackend):
                 for record in result
             }
     
-    def store_table_clusters_with_analysis(self, clusters: List[Set[str]], cluster_analyses: List[Any]) -> None:
+    def store_table_clusters_with_analysis(self, clusters, cluster_analyses: List[Any]) -> None:
         """Store table clusters with LLM-generated names and descriptions."""
         with self.driver.session() as session:
             # Clear existing cluster data
@@ -538,7 +538,14 @@ class Neo4jBackend(GraphBackend):
                 DELETE r
             """)
             
-            for cluster_tables, analysis in zip(clusters, cluster_analyses):
+            for cluster_data, analysis in zip(clusters, cluster_analyses):
+                # Handle both formats: (core_table, cluster_set) or just cluster_set
+                if isinstance(cluster_data, tuple):
+                    core_table, cluster_tables = cluster_data
+                else:
+                    cluster_tables = cluster_data
+                    core_table = None
+                
                 if len(cluster_tables) == 0:
                     continue
                     
@@ -587,7 +594,7 @@ class Neo4jBackend(GraphBackend):
             
             self.logger.info(f"Stored {len(clusters)} analyzed table clusters in Neo4j")
     
-    def store_table_clusters(self, clusters: List[Set[str]]) -> None:
+    def store_table_clusters(self, clusters) -> None:
         """Store table clusters as Cluster nodes with relationships to tables (legacy method)."""
         with self.driver.session() as session:
             # Clear existing cluster data
@@ -602,7 +609,16 @@ class Neo4jBackend(GraphBackend):
                 DELETE r
             """)
             
-            for i, cluster_tables in enumerate(clusters, 1):
+            for i, cluster_data in enumerate(clusters, 1):
+                # Handle both formats: (core_table, cluster_set) or just cluster_set
+                if isinstance(cluster_data, tuple):
+                    core_table, cluster_tables = cluster_data
+                    cluster_name = core_table
+                else:
+                    cluster_tables = cluster_data
+                    core_table = None
+                    cluster_name = f"cluster_{i}"
+                
                 if len(cluster_tables) == 0:
                     continue
                     
@@ -614,11 +630,12 @@ class Neo4jBackend(GraphBackend):
                 connectivity_score = self._calculate_cluster_connectivity(cluster_tables_list)
                 domain_keywords = self._get_cluster_keywords(cluster_tables_list)
                 
+                
                 # Create cluster node
                 session.run("""
                     CREATE (c:Cluster {
                         id: $cluster_id,
-                        name: $cluster_id,
+                        name: $cluster_name,
                         description: $description,
                         size: $size,
                         connectivity_score: $connectivity_score,
@@ -627,6 +644,7 @@ class Neo4jBackend(GraphBackend):
                     })
                 """, {
                     'cluster_id': cluster_id,
+                    'cluster_name': cluster_name,
                     'description': f"Database cluster containing {cluster_size} related tables",
                     'size': cluster_size,
                     'connectivity_score': connectivity_score,

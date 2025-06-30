@@ -541,12 +541,20 @@ def create_clusters(connection: str, method: str, min_size: int, max_hops: int, 
             click.echo(f"🔽 Filtered out {filtered_count} small clusters (<{min_size} tables)")
         
         # Display cluster information before analysis
-        for i, cluster in enumerate(clusters, 1):
+        for i, cluster_data in enumerate(clusters, 1):
+            # Handle both formats: (core_table, cluster_set) or just cluster_set
+            if isinstance(cluster_data, tuple):
+                core_table, cluster = cluster_data
+                cluster_name = f"{core_table}_cluster"
+            else:
+                cluster = cluster_data
+                cluster_name = f"Cluster {i}"
+            
             cluster_size = len(cluster)
             cluster_tables = ', '.join(sorted(cluster)[:5])  # Show first 5 tables
             if len(cluster) > 5:
                 cluster_tables += f" ... (+{len(cluster) - 5} more)"
-            click.echo(f"  Cluster {i}: {cluster_size} tables - {cluster_tables}")
+            click.echo(f"  {cluster_name}: {cluster_size} tables - {cluster_tables}")
         
         click.echo("🤖 Analyzing clusters with LLM for naming and descriptions...")
         try:
@@ -554,7 +562,13 @@ def create_clusters(connection: str, method: str, min_size: int, max_hops: int, 
             max_concurrent = int(os.getenv('LLM_MAX_CONCURRENT', '5'))
             
             # Convert clusters to list format for LLM analysis
-            cluster_lists = [list(cluster) for cluster in clusters]
+            cluster_lists = []
+            for cluster_data in clusters:
+                if isinstance(cluster_data, tuple):
+                    _, cluster = cluster_data
+                    cluster_lists.append(list(cluster))
+                else:
+                    cluster_lists.append(list(cluster_data))
             cluster_analyses = cluster_analyzer.analyze_clusters_batch_sync(cluster_lists, max_concurrent)
             
             click.echo("💾 Storing enhanced clusters in Neo4j...")
@@ -576,10 +590,25 @@ def create_clusters(connection: str, method: str, min_size: int, max_hops: int, 
         
         click.echo("✅ Clusters successfully created and stored!")
         click.echo(f"🏘️  Total clusters: {len(clusters)}")
-        click.echo(f"📋 Total tables clustered: {sum(len(cluster) for cluster in clusters)}")
+        # Calculate total tables clustered
+        total_tables = 0
+        for cluster_data in clusters:
+            if isinstance(cluster_data, tuple):
+                _, cluster = cluster_data
+                total_tables += len(cluster)
+            else:
+                total_tables += len(cluster_data)
+        
+        click.echo(f"📋 Total tables clustered: {total_tables}")
         
         # Show cluster statistics
-        cluster_sizes = [len(cluster) for cluster in clusters]
+        cluster_sizes = []
+        for cluster_data in clusters:
+            if isinstance(cluster_data, tuple):
+                _, cluster = cluster_data
+                cluster_sizes.append(len(cluster))
+            else:
+                cluster_sizes.append(len(cluster_data))
         if cluster_sizes:
             click.echo(f"📏 Cluster sizes: min={min(cluster_sizes)}, max={max(cluster_sizes)}, avg={sum(cluster_sizes)/len(cluster_sizes):.1f}")
         
