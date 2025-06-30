@@ -91,7 +91,8 @@ def explore_table(table_names: str, detailed: bool = True) -> Dict[str, Any]:
             "success": True,
             "tables_requested": len(table_list),
             "tables_found": len(found_tables),
-            "tables": found_tables
+            "tables": found_tables,
+            "result": found_tables
         }
         
         if missing_tables:
@@ -187,7 +188,8 @@ def show_cluster(cluster_id: str, detailed: bool = False) -> Dict[str, Any]:
             "success": True,
             "cluster_id": cluster_id,
             "table_count": len(tables),
-            "tables": tables
+            "tables": tables,
+            "result": tables
         }
         
         # Add cluster metadata if found
