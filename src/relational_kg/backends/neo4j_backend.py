@@ -706,6 +706,135 @@ class Neo4jBackend(GraphBackend):
                 all_keywords.update(business_concepts)
             
             return sorted(list(all_keywords))
+    
+    def get_all_clusters(self) -> List[Dict[str, Any]]:
+        """Get basic information about all clusters."""
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (c:Cluster)
+                OPTIONAL MATCH (t)-[:BELONGS_TO_CLUSTER]->(c)
+                RETURN c.id as id,
+                       c.name as name,
+                       c.description as description,
+                       c.keywords as keywords,
+                       c.size as size,
+                       collect(t.name) as table_names
+                ORDER BY c.name
+            """)
+            
+            clusters = []
+            for record in result:
+                table_names = [name for name in record['table_names'] if name is not None]
+                clusters.append({
+                    'id': record['id'],
+                    'name': record['name'],
+                    'description': record['description'] or '',
+                    'keywords': record['keywords'] or [],
+                    'size': record['size'] or 0,
+                    'tables': sorted(table_names)
+                })
+            
+            return clusters
+    
+    def get_cluster_tables(self, cluster_id: str, detailed: bool = False, connection_string: str = None) -> List[Dict[str, Any]]:
+        """Get detailed table information for a specific cluster."""
+        # If detailed mode, extract schema once for all tables
+        all_tables_schema = {}
+        if detailed and connection_string:
+            try:
+                from ..database import DatabaseExtractor
+                db_extractor = DatabaseExtractor(connection_string)
+                db_extractor.connect()
+                all_tables_schema = db_extractor.extract_schema(include_views=True)
+                db_extractor.close()
+                self.logger.info(f"Extracted schema for {len(all_tables_schema)} tables/views for detailed mode")
+            except Exception as e:
+                self.logger.warning(f"Failed to extract database schema for detailed mode: {e}")
+        
+        with self.driver.session() as session:
+            # Get all tables that belong to the specified cluster
+            result = session.run("""
+                MATCH (t)-[:BELONGS_TO_CLUSTER]->(c:Cluster {id: $cluster_id})
+                RETURN t.name as name,
+                       t.columns as columns,
+                       t.primary_keys as primary_keys,
+                       t.is_view as is_view,
+                       t.keywords as keywords,
+                       t.business_concepts as business_concepts
+                ORDER BY t.name
+            """, cluster_id=cluster_id)
+            
+            tables = []
+            for record in result:
+                # Get foreign key information for this table
+                fk_result = session.run("""
+                    MATCH (source {name: $table_name})-[r:REFERENCES]->(target)
+                    RETURN r.foreign_key_columns as constrained_columns,
+                           target.name as target_table
+                """, table_name=record['name'])
+                
+                foreign_keys = []
+                for fk_record in fk_result:
+                    foreign_keys.append({
+                        'constrained_columns': fk_record['constrained_columns'] or [],
+                        'referred_table': fk_record['target_table'],
+                        'referred_columns': []  # Not stored in current schema
+                    })
+                
+                # Build column information
+                columns = []
+                column_names = record['columns'] or []
+                primary_keys = record['primary_keys'] or []
+                
+                if detailed and all_tables_schema:
+                    # Use pre-extracted schema data
+                    table_schema = all_tables_schema.get(record['name'])
+                    if table_schema:
+                        # Use actual column information from database
+                        for col_info in table_schema.columns:
+                            columns.append({
+                                'name': col_info.name,
+                                'type': str(col_info.type),
+                                'nullable': col_info.nullable,
+                                'primary_key': col_info.primary_key,
+                                'foreign_key': col_info.foreign_key
+                            })
+                    else:
+                        # Fallback to basic info if table not found
+                        for col_name in column_names:
+                            columns.append({
+                                'name': col_name,
+                                'type': 'NOT FOUND',
+                                'nullable': True,
+                                'primary_key': col_name in primary_keys,
+                                'foreign_key': None
+                            })
+                elif detailed:
+                    # Detailed mode but no connection string provided
+                    for col_name in column_names:
+                        columns.append({
+                            'name': col_name,
+                            'type': 'NO_CONNECTION',
+                            'nullable': True,
+                            'primary_key': col_name in primary_keys,
+                            'foreign_key': None
+                        })
+                else:
+                    # Basic mode - just column names and primary key info
+                    for col_name in column_names:
+                        columns.append({
+                            'name': col_name,
+                            'primary_key': col_name in primary_keys
+                        })
+                
+                tables.append({
+                    'name': record['name'],
+                    'is_view': record['is_view'] or False,
+                    'columns': columns,
+                    'foreign_keys': foreign_keys
+                })
+            
+            return tables
 
     def __del__(self):
         """Cleanup when object is destroyed."""

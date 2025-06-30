@@ -50,3 +50,13 @@ class GraphBackend(ABC):
     def get_graph_stats(self) -> Dict[str, Any]:
         """Get graph statistics (nodes, edges, etc.)."""
         pass
+    
+    @abstractmethod
+    def get_all_clusters(self) -> List[Dict[str, Any]]:
+        """Get basic information about all clusters."""
+        pass
+    
+    @abstractmethod
+    def get_cluster_tables(self, cluster_id: str, detailed: bool = False, connection_string: str = None) -> List[Dict[str, Any]]:
+        """Get detailed table information for a specific cluster."""
+        pass

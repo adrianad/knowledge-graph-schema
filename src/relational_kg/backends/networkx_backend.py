@@ -62,3 +62,13 @@ class NetworkXBackend(GraphBackend):
     def save_to_file(self, filepath: str) -> None:
         """Save graph data to JSON file."""
         self.schema_graph.save_to_file(filepath)
+    
+    def get_all_clusters(self) -> List[Dict[str, Any]]:
+        """Get basic information about all clusters."""
+        # NetworkX doesn't persistently store clusters, so return empty list
+        return []
+    
+    def get_cluster_tables(self, cluster_id: str, detailed: bool = False, connection_string: str = None) -> List[Dict[str, Any]]:
+        """Get detailed table information for a specific cluster."""
+        # NetworkX doesn't persistently store clusters, so return empty list
+        return []

@@ -707,5 +707,109 @@ def find_tables_semantic(connection: str, query: str, max_tables: int, max_views
         sys.exit(1)
 
 
+@main.command()
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
+@backend_options
+def list_clusters(connection: str, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
+    """List all clusters with basic information."""
+    try:
+        # Use DATABASE_URL from environment if connection not provided
+        connection_final = connection or os.getenv('DATABASE_URL')
+        if not connection_final:
+            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
+            sys.exit(1)
+            
+        analyzer = _create_analyzer(connection_final, backend, neo4j_uri, neo4j_user, neo4j_password)
+        
+        # Get all clusters
+        clusters = analyzer.backend.get_all_clusters()
+        
+        if not clusters:
+            click.echo("❌ No clusters found in the database")
+            click.echo("💡 Use 'rkg create-clusters' to generate clusters first")
+            return
+        
+        click.echo(f"📋 Found {len(clusters)} clusters:")
+        click.echo()
+        
+        # Display clusters in a table format
+        for cluster in clusters:
+            click.echo(f"🏷️  {cluster['name']} (ID: {cluster['id']})")
+            click.echo(f"   📝 {cluster['description']}")
+            if cluster['keywords']:
+                click.echo(f"   🏷️  Keywords: {', '.join(cluster['keywords'])}")
+            click.echo(f"   📊 Size: {cluster['size']} tables")
+            if cluster['tables']:
+                click.echo(f"   🗃️  Tables: {', '.join(cluster['tables'])}")
+            click.echo()
+        
+        analyzer.close()
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
+@click.option('--cluster-id', '-i', required=True, help='Cluster ID to show details for')
+@click.option('--detailed', '-d', is_flag=True, help='Show detailed column information including data types')
+@backend_options
+def show_cluster(connection: str, cluster_id: str, detailed: bool, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
+    """Show detailed information about a specific cluster."""
+    try:
+        # Use DATABASE_URL from environment if connection not provided
+        connection_final = connection or os.getenv('DATABASE_URL')
+        if not connection_final:
+            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
+            sys.exit(1)
+            
+        analyzer = _create_analyzer(connection_final, backend, neo4j_uri, neo4j_user, neo4j_password)
+        
+        # Get detailed cluster information
+        tables = analyzer.backend.get_cluster_tables(cluster_id, detailed, connection_final if detailed else None)
+        
+        if not tables:
+            click.echo(f"❌ Cluster '{cluster_id}' not found or contains no tables")
+            click.echo("💡 Use 'rkg list-clusters' to see available clusters")
+            return
+        
+        click.echo(f"📋 Cluster '{cluster_id}' contains {len(tables)} tables:")
+        click.echo()
+        
+        # Display each table with its details
+        for table in tables:
+            table_type = "View" if table['is_view'] else "Table"
+            click.echo(f"🗃️  {table['name']} ({table_type})")
+            
+            # Show columns
+            if table['columns']:
+                click.echo(f"   📊 Columns ({len(table['columns'])}):")
+                for col in table['columns']:
+                    pk_indicator = " (PK)" if col['primary_key'] else ""
+                    if detailed and 'type' in col:
+                        nullable_indicator = "" if col.get('nullable', True) else " NOT NULL"
+                        fk_indicator = f" -> {col['foreign_key']}" if col.get('foreign_key') else ""
+                        click.echo(f"     • {col['name']}: {col['type']}{nullable_indicator}{pk_indicator}{fk_indicator}")
+                    else:
+                        click.echo(f"     • {col['name']}{pk_indicator}")
+            
+            # Show foreign keys
+            if table['foreign_keys']:
+                click.echo(f"   🔗 Foreign Keys:")
+                for fk in table['foreign_keys']:
+                    source_cols = ', '.join(fk['constrained_columns'])
+                    target_cols = ', '.join(fk['referred_columns'])
+                    click.echo(f"     • {source_cols} → {fk['referred_table']}.{target_cols}")
+            
+            click.echo()
+        
+        analyzer.close()
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
 if __name__ == '__main__':
     main()
