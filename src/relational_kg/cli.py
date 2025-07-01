@@ -26,6 +26,42 @@ logging.basicConfig(
 )
 
 
+# MCP Tool Wrappers for internal CLI use
+def _call_mcp_explore_table(table_names_str: str, detailed: bool = True) -> dict:
+    """Internal wrapper to call MCP explore_table tool."""
+    try:
+        # Import MCP functions directly
+        from .mcp_server import explore_table as mcp_explore_table
+        
+        # Call MCP tool directly
+        result = mcp_explore_table(table_names_str, detailed)
+        return result
+    except Exception as e:
+        return {"result": {"success": False, "error": str(e)}}
+
+
+def _call_mcp_list_clusters() -> dict:
+    """Internal wrapper to call MCP list_clusters tool."""
+    try:
+        from .mcp_server import list_clusters as mcp_list_clusters
+        
+        result = mcp_list_clusters()
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _call_mcp_show_cluster(cluster_id: str, detailed: bool = False) -> dict:
+    """Internal wrapper to call MCP show_cluster tool."""
+    try:
+        from .mcp_server import show_cluster as mcp_show_cluster
+        
+        result = mcp_show_cluster(cluster_id, detailed)
+        return result
+    except Exception as e:
+        return {"result": {"success": False, "error": str(e)}}
+
+
 def _create_analyzer(connection: str, backend: str = 'networkx', 
                     neo4j_uri: str = None, neo4j_user: str = None, 
                     neo4j_password: str = None) -> SchemaAnalyzer:
@@ -407,11 +443,16 @@ def llm_keyword_extraction(connection: str, include_views: bool, max_concurrent:
 def explore_table(connection: str, table: tuple, detailed: bool, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
     """Get detailed information about specific tables from existing Neo4j graph."""
     try:
-        # Use DATABASE_URL from environment if connection not provided
-        connection_final = connection or os.getenv('DATABASE_URL')
-        if not connection_final:
-            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
-            sys.exit(1)
+        # Ensure Neo4j environment variables are set for MCP tools
+        if not os.getenv('NEO4J_PASSWORD'):
+            # Try to get from passed parameters
+            neo4j_password = neo4j_password or click.prompt("Neo4j password", hide_input=True)
+            os.environ['NEO4J_PASSWORD'] = neo4j_password
+        
+        if neo4j_uri:
+            os.environ['NEO4J_URI'] = neo4j_uri
+        if neo4j_user:
+            os.environ['NEO4J_USER'] = neo4j_user
             
         # Process table names (handle comma-separated input)
         table_names = []
@@ -425,62 +466,34 @@ def explore_table(connection: str, table: tuple, detailed: bool, backend: str, n
             click.echo("❌ No table names provided", err=True)
             sys.exit(1)
             
-        analyzer = _create_analyzer(connection_final, backend, neo4j_uri, neo4j_user, neo4j_password)
+        click.echo(f"🔍 Getting DDL for {len(table_names)} table(s) from Neo4j graph...")
         
-        click.echo(f"🔍 Getting details for {len(table_names)} table(s) from existing Neo4j graph...")
+        # Call MCP tool to get DDL
+        table_names_str = ','.join(table_names)
+        result = _call_mcp_explore_table(table_names_str, detailed)
         
-        # Get table details directly from Neo4j (no schema rebuilding)
-        tables = analyzer.backend.get_table_details(table_names, detailed, connection_final if detailed else None)
+        if not result.get('result', {}).get('success', False):
+            error_msg = result.get('result', {}).get('error', 'Unknown error')
+            click.echo(f"❌ Error: {error_msg}", err=True)
+            if 'Neo4j' in error_msg:
+                click.echo("💡 Make sure Neo4j is running and you have run 'rkg analyze' to build the graph first")
+            sys.exit(1)
         
-        if not tables:
-            click.echo("❌ No tables found in Neo4j graph")
-            click.echo("💡 Make sure you have run 'rkg analyze' to build the graph first")
-            return
-        
-        # Separate found tables and missing tables
-        found_tables = [t for t in tables if not t.get('not_found', False)]
-        missing_tables = [t for t in tables if t.get('not_found', False)]
-        
+        # Handle missing tables
+        missing_tables = result.get('result', {}).get('missing_tables', [])
         if missing_tables:
-            click.echo(f"⚠️  Tables not found in Neo4j: {', '.join([t['name'] for t in missing_tables])}")
+            click.echo(f"⚠️  Tables not found in Neo4j: {', '.join(missing_tables)}")
             click.echo()
         
-        if not found_tables:
-            click.echo("❌ None of the specified tables were found in the Neo4j graph")
-            return
-        
-        click.echo(f"📋 Found {len(found_tables)} table(s) in Neo4j graph:")
-        click.echo()
-        
-        # Display each table with its details (same format as show-cluster)
-        for table_info in found_tables:
-            table_type = "View" if table_info['is_view'] else "Table"
-            click.echo(f"🗃️  {table_info['name']} ({table_type})")
-            
-            # Show columns
-            if table_info['columns']:
-                click.echo(f"   📊 Columns ({len(table_info['columns'])}):")
-                for col in table_info['columns']:
-                    pk_indicator = " (PK)" if col['primary_key'] else ""
-                    if detailed and 'type' in col:
-                        nullable_indicator = "" if col.get('nullable', True) else " NOT NULL"
-                        fk_indicator = f" -> {col['foreign_key']}" if col.get('foreign_key') else ""
-                        click.echo(f"     • {col['name']}: {col['type']}{nullable_indicator}{pk_indicator}{fk_indicator}")
-                    else:
-                        click.echo(f"     • {col['name']}{pk_indicator}")
-            else:
-                click.echo(f"   📊 No columns found in Neo4j data")
-            
-            # Show foreign keys
-            if table_info['foreign_keys']:
-                click.echo(f"   🔗 Foreign Keys:")
-                for fk in table_info['foreign_keys']:
-                    source_cols = ', '.join(fk['constrained_columns'])
-                    click.echo(f"     • {source_cols} → {fk['referred_table']}")
-            
+        # Display DDL
+        ddl = result.get('result', {}).get('ddl', '')
+        if ddl:
+            tables_found = result.get('result', {}).get('tables_found', 0)
+            click.echo(f"📋 Found {tables_found} table(s) in Neo4j graph:")
             click.echo()
-        
-        analyzer.close()
+            click.echo(ddl)
+        else:
+            click.echo("❌ No DDL found for the specified tables")
         
     except Exception as e:
         click.echo(f"❌ Error: {e}", err=True)
@@ -712,17 +725,30 @@ def find_tables_semantic(connection: str, query: str, max_tables: int, max_views
 def list_clusters(connection: str, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
     """List all clusters with basic information."""
     try:
-        # Use DATABASE_URL from environment if connection not provided
-        connection_final = connection or os.getenv('DATABASE_URL')
-        if not connection_final:
-            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
-            sys.exit(1)
+        # Ensure Neo4j environment variables are set for MCP tools
+        if not os.getenv('NEO4J_PASSWORD'):
+            # Try to get from passed parameters
+            neo4j_password = neo4j_password or click.prompt("Neo4j password", hide_input=True)
+            os.environ['NEO4J_PASSWORD'] = neo4j_password
+        
+        if neo4j_uri:
+            os.environ['NEO4J_URI'] = neo4j_uri
+        if neo4j_user:
+            os.environ['NEO4J_USER'] = neo4j_user
             
-        analyzer = _create_analyzer(connection_final, backend, neo4j_uri, neo4j_user, neo4j_password)
+        click.echo("🔍 Getting cluster list from Neo4j graph...")
         
-        # Get all clusters
-        clusters = analyzer.backend.get_all_clusters()
+        # Call MCP tool to get clusters
+        result = _call_mcp_list_clusters()
         
+        if not result.get('success', False):
+            error_msg = result.get('error', 'Unknown error')
+            click.echo(f"❌ Error: {error_msg}", err=True)
+            if 'Neo4j' in error_msg:
+                click.echo("💡 Make sure Neo4j is running and you have run 'rkg create-clusters' first")
+            sys.exit(1)
+        
+        clusters = result.get('clusters', [])
         if not clusters:
             click.echo("❌ No clusters found in the database")
             click.echo("💡 Use 'rkg create-clusters' to generate clusters first")
@@ -731,7 +757,7 @@ def list_clusters(connection: str, backend: str, neo4j_uri: str, neo4j_user: str
         click.echo(f"📋 Found {len(clusters)} clusters:")
         click.echo()
         
-        # Display clusters in a table format
+        # Display clusters in a table format (keep existing formatting)
         for cluster in clusters:
             click.echo(f"🏷️  {cluster['name']} (ID: {cluster['id']})")
             click.echo(f"   📝 {cluster['description']}")
@@ -741,8 +767,6 @@ def list_clusters(connection: str, backend: str, neo4j_uri: str, neo4j_user: str
             if cluster['tables']:
                 click.echo(f"   🗃️  Tables: {', '.join(cluster['tables'])}")
             click.echo()
-        
-        analyzer.close()
         
     except Exception as e:
         click.echo(f"❌ Error: {e}", err=True)
@@ -757,53 +781,51 @@ def list_clusters(connection: str, backend: str, neo4j_uri: str, neo4j_user: str
 def show_cluster(connection: str, cluster_id: str, detailed: bool, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
     """Show detailed information about a specific cluster."""
     try:
-        # Use DATABASE_URL from environment if connection not provided
-        connection_final = connection or os.getenv('DATABASE_URL')
-        if not connection_final:
-            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
-            sys.exit(1)
+        # Ensure Neo4j environment variables are set for MCP tools
+        if not os.getenv('NEO4J_PASSWORD'):
+            # Try to get from passed parameters
+            neo4j_password = neo4j_password or click.prompt("Neo4j password", hide_input=True)
+            os.environ['NEO4J_PASSWORD'] = neo4j_password
+        
+        if neo4j_uri:
+            os.environ['NEO4J_URI'] = neo4j_uri
+        if neo4j_user:
+            os.environ['NEO4J_USER'] = neo4j_user
             
-        analyzer = _create_analyzer(connection_final, backend, neo4j_uri, neo4j_user, neo4j_password)
+        click.echo(f"🔍 Getting DDL for cluster '{cluster_id}' from Neo4j graph...")
         
-        # Get detailed cluster information
-        tables = analyzer.backend.get_cluster_tables(cluster_id, detailed, connection_final if detailed else None)
+        # Call MCP tool to get cluster DDL
+        result = _call_mcp_show_cluster(cluster_id, detailed)
         
-        if not tables:
-            click.echo(f"❌ Cluster '{cluster_id}' not found or contains no tables")
-            click.echo("💡 Use 'rkg list-clusters' to see available clusters")
-            return
+        if not result.get('result', {}).get('success', False):
+            error_msg = result.get('result', {}).get('error', 'Unknown error')
+            click.echo(f"❌ Error: {error_msg}", err=True)
+            if 'not found' in error_msg.lower():
+                click.echo("💡 Use 'rkg list-clusters' to see available clusters")
+            sys.exit(1)
         
-        click.echo(f"📋 Cluster '{cluster_id}' contains {len(tables)} tables:")
+        # Display cluster metadata
+        cluster_data = result.get('result', {})
+        cluster_name = cluster_data.get('cluster_name', '')
+        cluster_description = cluster_data.get('cluster_description', '')
+        cluster_keywords = cluster_data.get('cluster_keywords', [])
+        table_count = cluster_data.get('table_count', 0)
+        
+        click.echo(f"📋 Cluster '{cluster_id}' contains {table_count} tables:")
+        if cluster_name:
+            click.echo(f"   🏷️  Name: {cluster_name}")
+        if cluster_description:
+            click.echo(f"   📝 Description: {cluster_description}")
+        if cluster_keywords:
+            click.echo(f"   🏷️  Keywords: {', '.join(cluster_keywords)}")
         click.echo()
         
-        # Display each table with its details
-        for table in tables:
-            table_type = "View" if table['is_view'] else "Table"
-            click.echo(f"🗃️  {table['name']} ({table_type})")
-            
-            # Show columns
-            if table['columns']:
-                click.echo(f"   📊 Columns ({len(table['columns'])}):")
-                for col in table['columns']:
-                    pk_indicator = " (PK)" if col['primary_key'] else ""
-                    if detailed and 'type' in col:
-                        nullable_indicator = "" if col.get('nullable', True) else " NOT NULL"
-                        fk_indicator = f" -> {col['foreign_key']}" if col.get('foreign_key') else ""
-                        click.echo(f"     • {col['name']}: {col['type']}{nullable_indicator}{pk_indicator}{fk_indicator}")
-                    else:
-                        click.echo(f"     • {col['name']}{pk_indicator}")
-            
-            # Show foreign keys
-            if table['foreign_keys']:
-                click.echo(f"   🔗 Foreign Keys:")
-                for fk in table['foreign_keys']:
-                    source_cols = ', '.join(fk['constrained_columns'])
-                    target_cols = ', '.join(fk['referred_columns'])
-                    click.echo(f"     • {source_cols} → {fk['referred_table']}.{target_cols}")
-            
-            click.echo()
-        
-        analyzer.close()
+        # Display DDL
+        ddl = cluster_data.get('ddl', '')
+        if ddl:
+            click.echo(ddl)
+        else:
+            click.echo("❌ No DDL found for this cluster")
         
     except Exception as e:
         click.echo(f"❌ Error: {e}", err=True)
