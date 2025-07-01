@@ -10,6 +10,7 @@ except ImportError:
 
 from .base import GraphBackend
 from ..database import TableInfo
+from ..ddl_generator import generate_table_ddl
 
 
 class Neo4jBackend(GraphBackend):
@@ -41,6 +42,14 @@ class Neo4jBackend(GraphBackend):
             # Create table and view nodes
             for table_name, table_info in tables.items():
                 node_label = "View" if table_info.is_view else "Table"
+                
+                # Generate DDL for this table/view
+                try:
+                    ddl = generate_table_ddl(table_info, dialect='postgresql')
+                except Exception as e:
+                    self.logger.warning(f"Failed to generate DDL for {table_name}: {e}")
+                    ddl = f"-- DDL generation failed for {table_name}: {e}"
+                
                 session.run(f"""
                     CREATE (t:{node_label} {{
                         name: $name,
@@ -48,6 +57,7 @@ class Neo4jBackend(GraphBackend):
                         primary_keys: $primary_keys,
                         column_count: $column_count,
                         is_view: $is_view,
+                        ddl: $ddl,
                         keywords: $keywords,
                         business_concepts: $business_concepts
                     }})
@@ -57,6 +67,7 @@ class Neo4jBackend(GraphBackend):
                     'primary_keys': [col.name for col in table_info.columns if col.primary_key],
                     'column_count': len(table_info.columns),
                     'is_view': table_info.is_view,
+                    'ddl': ddl,
                     'keywords': [],  # Will be populated by LLM extraction
                     'business_concepts': []  # Will be populated by LLM extraction
                 })
@@ -955,6 +966,78 @@ class Neo4jBackend(GraphBackend):
                     })
             
             return tables
+    
+    def get_table_ddl(self, table_names: List[str]) -> List[Dict[str, Any]]:
+        """Get DDL statements for specific tables from Neo4j.
+        
+        Args:
+            table_names: List of table names to get DDL for
+            
+        Returns:
+            List of dictionaries with table name and DDL
+        """
+        with self.driver.session() as session:
+            # Get DDL for specified tables
+            result = session.run("""
+                MATCH (t)
+                WHERE t.name IN $table_names
+                RETURN t.name as name,
+                       t.ddl as ddl,
+                       t.is_view as is_view
+                ORDER BY t.name
+            """, table_names=table_names)
+            
+            tables_ddl = []
+            found_tables = set()
+            
+            for record in result:
+                found_tables.add(record['name'])
+                tables_ddl.append({
+                    'name': record['name'],
+                    'ddl': record['ddl'] or f"-- DDL not available for {record['name']}",
+                    'is_view': record['is_view'] or False
+                })
+            
+            # Check for tables that weren't found
+            missing_tables = set(table_names) - found_tables
+            if missing_tables:
+                self.logger.warning(f"Tables not found in Neo4j: {sorted(missing_tables)}")
+                
+                # Add placeholder entries for missing tables
+                for missing_table in sorted(missing_tables):
+                    tables_ddl.append({
+                        'name': missing_table,
+                        'ddl': f"-- Table '{missing_table}' not found in knowledge graph",
+                        'is_view': False,
+                        'not_found': True
+                    })
+            
+            return tables_ddl
+    
+    def get_cluster_tables_ddl(self, cluster_id: str) -> List[Dict[str, Any]]:
+        """Get DDL statements for all tables in a specific cluster.
+        
+        Args:
+            cluster_id: The cluster ID to get table DDL for
+            
+        Returns:
+            List of dictionaries with table name and DDL
+        """
+        with self.driver.session() as session:
+            # Get table names for the specified cluster
+            result = session.run("""
+                MATCH (t)-[:BELONGS_TO_CLUSTER]->(c:Cluster {id: $cluster_id})
+                RETURN t.name as name
+                ORDER BY t.name
+            """, cluster_id=cluster_id)
+            
+            table_names = [record['name'] for record in result]
+            
+            if not table_names:
+                return []
+            
+            # Get DDL for these tables
+            return self.get_table_ddl(table_names)
     
     def get_tables_for_keyword_extraction(self, connection_string: str, include_views: bool = True) -> Dict[str, Any]:
         """Get tables that need keyword extraction and their detailed schema information."""

@@ -78,20 +78,27 @@ def explore_table(table_names: str, detailed: bool = True) -> Dict[str, Any]:
         if not table_list:
             return {"error": "No table names provided"}
         
-        logger.info(f"Getting details for tables: {table_list}")
+        logger.info(f"Getting DDL for tables: {table_list}")
         
-        # Get table details from Neo4j
-        tables = analyzer.backend.get_table_details(table_list, detailed=detailed)
+        # Get table DDL from Neo4j
+        tables_ddl = analyzer.backend.get_table_ddl(table_list)
         
         # Separate found and missing tables  
-        found_tables = [t for t in tables if not t.get('not_found', False)]
-        missing_tables = [t['name'] for t in tables if t.get('not_found', False)]
+        found_tables = [t for t in tables_ddl if not t.get('not_found', False)]
+        missing_tables = [t['name'] for t in tables_ddl if t.get('not_found', False)]
+        
+        # Format DDL output
+        ddl_statements = []
+        for table in found_tables:
+            ddl_statements.append(f"-- {table['name']}")
+            ddl_statements.append(table['ddl'])
+            ddl_statements.append("")  # Empty line between tables
         
         result = {
             "success": True,
             "tables_requested": len(table_list),
             "tables_found": len(found_tables),
-            "tables": found_tables
+            "ddl": "\n".join(ddl_statements).strip()
         }
         
         if missing_tables:
@@ -163,12 +170,12 @@ def show_cluster(cluster_id: str, detailed: bool = False) -> Dict[str, Any]:
         if not cluster_id:
             return {"error": "cluster_id is required"}
         
-        logger.info(f"Getting details for cluster: {cluster_id}")
+        logger.info(f"Getting DDL for cluster: {cluster_id}")
         
-        # Get cluster tables from Neo4j
-        tables = analyzer.backend.get_cluster_tables(cluster_id, detailed=detailed)
+        # Get cluster table DDL from Neo4j
+        tables_ddl = analyzer.backend.get_cluster_tables_ddl(cluster_id)
         
-        if not tables:
+        if not tables_ddl:
             return {"result": {
                 "success": False,
                 "error": f"Cluster '{cluster_id}' not found",
@@ -183,11 +190,18 @@ def show_cluster(cluster_id: str, detailed: bool = False) -> Dict[str, Any]:
                 cluster_info = cluster
                 break
         
+        # Format DDL output
+        ddl_statements = []
+        for table in tables_ddl:
+            ddl_statements.append(f"-- {table['name']}")
+            ddl_statements.append(table['ddl'])
+            ddl_statements.append("")  # Empty line between tables
+        
         result = {
             "success": True,
             "cluster_id": cluster_id,
-            "table_count": len(tables),
-            "tables": tables
+            "table_count": len(tables_ddl),
+            "ddl": "\n".join(ddl_statements).strip()
         }
         
         # Add cluster metadata if found
