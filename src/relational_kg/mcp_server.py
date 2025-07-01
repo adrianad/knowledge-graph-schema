@@ -91,8 +91,7 @@ def explore_table(table_names: str, detailed: bool = True) -> Dict[str, Any]:
             "success": True,
             "tables_requested": len(table_list),
             "tables_found": len(found_tables),
-            "tables": found_tables,
-            "result": found_tables
+            "tables": found_tables
         }
         
         if missing_tables:
@@ -100,15 +99,15 @@ def explore_table(table_names: str, detailed: bool = True) -> Dict[str, Any]:
             result["warning"] = f"Tables not found in Neo4j: {', '.join(missing_tables)}"
         
         analyzer.close()
-        return result
+        return {"result": result}
         
     except Exception as e:
         logger.error(f"Error in explore_table: {e}")
-        return {
+        return {"result": {
             "success": False,
             "error": str(e),
             "help": "Make sure Neo4j is running and the knowledge graph has been built with 'rkg analyze'"
-        }
+        }}
 
 
 @mcp.tool() 
@@ -170,11 +169,11 @@ def show_cluster(cluster_id: str, detailed: bool = False) -> Dict[str, Any]:
         tables = analyzer.backend.get_cluster_tables(cluster_id, detailed=detailed)
         
         if not tables:
-            return {
+            return {"result": {
                 "success": False,
                 "error": f"Cluster '{cluster_id}' not found",
                 "help": "Use list_clusters to see available cluster IDs"
-            }
+            }}
         
         # Get cluster metadata
         all_clusters = analyzer.backend.get_all_clusters()
@@ -188,8 +187,7 @@ def show_cluster(cluster_id: str, detailed: bool = False) -> Dict[str, Any]:
             "success": True,
             "cluster_id": cluster_id,
             "table_count": len(tables),
-            "tables": tables,
-            "result": tables
+            "tables": tables
         }
         
         # Add cluster metadata if found
@@ -199,15 +197,15 @@ def show_cluster(cluster_id: str, detailed: bool = False) -> Dict[str, Any]:
             result["cluster_keywords"] = cluster_info.get('keywords', [])
         
         analyzer.close()
-        return result
+        return {"result": result}
         
     except Exception as e:
         logger.error(f"Error in show_cluster: {e}")
-        return {
+        return {"result": {
             "success": False,
             "error": str(e),
             "help": "Make sure Neo4j is running and the cluster exists"
-        }
+        }}
 
 
 if __name__ == "__main__":
