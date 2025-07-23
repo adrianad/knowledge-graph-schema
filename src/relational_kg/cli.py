@@ -506,8 +506,9 @@ def explore_table(connection: str, table: tuple, detailed: bool, backend: str, n
 @click.option('--min-size', default=4, help='Minimum cluster size (importance method only)')
 @click.option('--max-hops', default=2, help='Maximum relationship hops (importance method only)')
 @click.option('--top-pct', default=0.2, help='Percentage of top tables to use as cores (importance method only)')
+@click.option('--no-llm', is_flag=True, help='Skip LLM analysis and use simple cluster naming')
 @backend_options
-def create_clusters(connection: str, method: str, min_size: int, max_hops: int, top_pct: float, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
+def create_clusters(connection: str, method: str, min_size: int, max_hops: int, top_pct: float, no_llm: bool, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
     """Calculate and store table clusters in Neo4j database."""
     try:
         # Use DATABASE_URL from environment if connection not provided
@@ -568,37 +569,41 @@ def create_clusters(connection: str, method: str, min_size: int, max_hops: int, 
                 cluster_tables += f" ... (+{len(cluster) - 5} more)"
             click.echo(f"  {cluster_name}: {cluster_size} tables - {cluster_tables}")
         
-        click.echo("🤖 Analyzing clusters with LLM for naming and descriptions...")
-        try:
-            cluster_analyzer = LLMClusterAnalyzer()
-            max_concurrent = int(os.getenv('LLM_MAX_CONCURRENT', '5'))
-            
-            # Convert clusters to list format for LLM analysis
-            cluster_lists = []
-            for cluster_data in clusters:
-                if isinstance(cluster_data, tuple):
-                    _, cluster = cluster_data
-                    cluster_lists.append(list(cluster))
-                else:
-                    cluster_lists.append(list(cluster_data))
-            cluster_analyses = cluster_analyzer.analyze_clusters_batch_sync(cluster_lists, max_concurrent)
-            
-            click.echo("💾 Storing enhanced clusters in Neo4j...")
-            analyzer.backend.store_table_clusters_with_analysis(clusters, cluster_analyses)
-            
-            # Display enhanced cluster information
-            click.echo("\n📋 Generated Cluster Analysis:")
-            for analysis in cluster_analyses:
-                click.echo(f"\n🏷️  {analysis.name} ({analysis.cluster_id})")
-                click.echo(f"   📝 {analysis.description}")
-                click.echo(f"   🏢 Domain: {analysis.business_domain}")
-                if analysis.keywords:
-                    click.echo(f"   🏷️  Keywords: {', '.join(analysis.keywords)}")
-                click.echo(f"   📊 Confidence: {analysis.confidence:.2f}")
-                
-        except Exception as e:
-            click.echo(f"⚠️  LLM analysis failed ({e}), falling back to basic cluster storage...")
+        if no_llm:
+            click.echo("💾 Storing clusters with simple naming (--no-llm mode)...")
             analyzer.backend.store_table_clusters(clusters)
+        else:
+            click.echo("🤖 Analyzing clusters with LLM for naming and descriptions...")
+            try:
+                cluster_analyzer = LLMClusterAnalyzer()
+                max_concurrent = int(os.getenv('LLM_MAX_CONCURRENT', '5'))
+                
+                # Convert clusters to list format for LLM analysis
+                cluster_lists = []
+                for cluster_data in clusters:
+                    if isinstance(cluster_data, tuple):
+                        _, cluster = cluster_data
+                        cluster_lists.append(list(cluster))
+                    else:
+                        cluster_lists.append(list(cluster_data))
+                cluster_analyses = cluster_analyzer.analyze_clusters_batch_sync(cluster_lists, max_concurrent)
+                
+                click.echo("💾 Storing enhanced clusters in Neo4j...")
+                analyzer.backend.store_table_clusters_with_analysis(clusters, cluster_analyses)
+                
+                # Display enhanced cluster information
+                click.echo("\n📋 Generated Cluster Analysis:")
+                for analysis in cluster_analyses:
+                    click.echo(f"\n🏷️  {analysis.name} ({analysis.cluster_id})")
+                    click.echo(f"   📝 {analysis.description}")
+                    click.echo(f"   🏢 Domain: {analysis.business_domain}")
+                    if analysis.keywords:
+                        click.echo(f"   🏷️  Keywords: {', '.join(analysis.keywords)}")
+                    click.echo(f"   📊 Confidence: {analysis.confidence:.2f}")
+                    
+            except Exception as e:
+                click.echo(f"⚠️  LLM analysis failed ({e}), falling back to basic cluster storage...")
+                analyzer.backend.store_table_clusters(clusters)
         
         click.echo("✅ Clusters successfully created and stored!")
         click.echo(f"🏘️  Total clusters: {len(clusters)}")
