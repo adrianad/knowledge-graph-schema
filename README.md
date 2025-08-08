@@ -35,19 +35,24 @@ pip install -r requirements.txt
 rkg analyze -c "sqlite:///your_database.db"
 ```
 
-2. **Find relevant tables for your query:**
+2. **Create table clusters:**
 ```bash
-rkg find-tables -c "sqlite:///your_database.db" -k "user,order,product"
+rkg create-clusters -c "sqlite:///your_database.db"
 ```
 
-3. **Create intelligent table clusters:**
+3. **Get main cluster (most important tables):**
 ```bash
-rkg create-clusters -c "sqlite:///your_database.db" --method importance
+rkg get-main-cluster
 ```
 
-4. **Visualize the schema graph:**
+4. **List additional clusters:**
 ```bash
-rkg visualize -c "sqlite:///your_database.db" -o schema_graph.html
+rkg list-clusters
+```
+
+5. **Explore specific cluster:**
+```bash
+rkg show-cluster -i cluster_3
 ```
 
 ## Usage Examples
@@ -61,13 +66,16 @@ rkg analyze -c "postgresql://user:pass@localhost/db"
 rkg analyze -c "sqlite:///ecommerce.db" -o graph_data.json
 ```
 
-### Find Relevant Tables
+### Work with Table Clusters
 ```bash
-# Find tables related to specific keywords
-rkg find-tables -c "sqlite:///shop.db" -k "customer,order" -m 5
+# Create clusters with importance-based method
+rkg create-clusters -c "sqlite:///shop.db" --method importance
 
-# Include related tables in results
-rkg find-tables -c "sqlite:///shop.db" -k "product" -r
+# Get the most important tables
+rkg get-main-cluster --detailed
+
+# List remaining clusters
+rkg list-clusters --exclude-main
 ```
 
 ### Get Join Suggestions
@@ -103,9 +111,8 @@ rkg create-clusters -c "sqlite:///shop.db" --backend neo4j
 # Extract business keywords using LLM
 rkg llm-keyword-extraction -c "sqlite:///shop.db"
 
-# Semantic table search with natural language
-rkg find-tables-semantic -c "sqlite:///shop.db" \
-  -q "tables related to customer orders and payments"
+# Create clusters with LLM analysis
+rkg create-clusters -c "sqlite:///shop.db" --llm
 
 # Explore table relationships
 rkg explore-table -c "sqlite:///shop.db" -t "orders" --hops 3

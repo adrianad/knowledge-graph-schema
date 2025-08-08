@@ -34,13 +34,14 @@ rkg analyze -c "postgresql://user:pass@localhost:5432/db" \
     --neo4j-user neo4j \
     --neo4j-password password123
 
-# Find tables with Neo4j
-rkg find-tables -c "postgresql://user:pass@localhost:5432/db" \
-    -k "user,order,product" \
-    --backend neo4j \
+# Create clusters with Neo4j
+rkg create-clusters -c "postgresql://user:pass@localhost:5432/db" \
     --neo4j-uri bolt://localhost:7687 \
     --neo4j-user neo4j \
     --neo4j-password password123
+
+# Get main cluster
+rkg get-main-cluster
 
 # Suggest joins with Neo4j
 rkg suggest-joins -c "postgresql://user:pass@localhost:5432/db" \

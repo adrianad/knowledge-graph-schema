@@ -8,12 +8,6 @@ from .database import DatabaseExtractor, TableInfo
 from .backends.base import GraphBackend
 
 
-@dataclass
-class TableRelevanceScore:
-    """Table relevance score for a query."""
-    table_name: str
-    score: float
-    reasons: List[str]
 
 
 class SchemaAnalyzer:
@@ -48,66 +42,6 @@ class SchemaAnalyzer:
         
         self.logger.info("Schema analysis completed")
     
-    def find_relevant_tables(
-        self, 
-        keywords: List[str], 
-        max_tables: int = 10
-    ) -> List[TableRelevanceScore]:
-        """Find tables relevant to given keywords."""
-        if not self._connected:
-            raise RuntimeError("Schema not analyzed. Call analyze_schema() first.")
-        
-        scores = {}
-        
-        for table_name in self.tables:
-            score, reasons = self._calculate_table_relevance(table_name, keywords)
-            if score > 0:
-                scores[table_name] = TableRelevanceScore(
-                    table_name=table_name,
-                    score=score,
-                    reasons=reasons
-                )
-        
-        # Sort by score and return top results
-        sorted_scores = sorted(scores.values(), key=lambda x: x.score, reverse=True)
-        return sorted_scores[:max_tables]
-    
-    def _calculate_table_relevance(
-        self, 
-        table_name: str, 
-        keywords: List[str]
-    ) -> Tuple[float, List[str]]:
-        """Calculate relevance score for a table given keywords."""
-        score = 0.0
-        reasons = []
-        
-        table_info = self.tables[table_name]
-        
-        # Check table name matches
-        for keyword in keywords:
-            keyword_lower = keyword.lower()
-            
-            # Exact table name match
-            if keyword_lower == table_name.lower():
-                score += 10.0
-                reasons.append(f"Exact table name match: {keyword}")
-                continue
-            
-            # Partial table name match
-            if keyword_lower in table_name.lower():
-                score += 5.0
-                reasons.append(f"Partial table name match: {keyword}")
-            
-            # Column name matches
-            for column in table_info.columns:
-                if keyword_lower == column.name.lower():
-                    score += 3.0
-                    reasons.append(f"Exact column match: {column.name}")
-                elif keyword_lower in column.name.lower():
-                    score += 1.0
-                    reasons.append(f"Partial column match: {column.name}")
-        
-        return score, reasons
     
     def get_table_cluster(self, table_name: str) -> Set[str]:
         """Get cluster of related tables for a given table."""

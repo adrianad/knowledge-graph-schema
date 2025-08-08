@@ -26,7 +26,6 @@ This is a Python application that creates knowledge graphs from database schemas
 
 ## CLI Commands
 - `rkg analyze -c "connection_string"` - Full schema analysis
-- `rkg find-tables -c "connection_string" -k "keywords"` - Keyword-based table search  
 - `rkg suggest-joins -c "connection_string" -t "tables"` - Join recommendations
 - `rkg visualize -c "connection_string"` - Interactive graph visualization
 - `rkg summary -c "connection_string"` - Schema statistics
@@ -37,7 +36,6 @@ This is a Python application that creates knowledge graphs from database schemas
   - `--max-hops N` - Maximum relationship distance (default: 2)
   - `--top-pct 0.2` - Percentage of top tables to use as cores (default: 20%)
 - `rkg llm-keyword-extraction -c "connection_string"` - Extract business keywords using LLM
-- `rkg find-tables-semantic -c "connection_string" -q "natural language query"` - Semantic table search
 - `rkg explore-table -c "connection_string" -t "table_name"` - Explore relationships from a specific table
 
 ## Development Status
@@ -79,7 +77,8 @@ The primary goal is schema reduction for LLMs - instead of providing entire data
 ```bash
 pip install -e .
 rkg analyze -c "sqlite:///your_database.db"
-rkg find-tables -c "connection_string" -k "user,order,product"
+rkg create-clusters -c "connection_string"
+rkg get-main-cluster
 ```
 
 ## Dependencies
