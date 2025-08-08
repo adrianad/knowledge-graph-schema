@@ -25,6 +25,7 @@ class CategorizedGroup(click.Group):
             'Schema Analysis': ['analyze', 'summary'],
             'Clustering': ['create-clusters', 'list-clusters', 'show-cluster', 'get-main-cluster'],
             'Table Exploration': ['explore-table', 'find-path', 'suggest-joins'],
+            'View Exploration': ['explore-view', 'find-related-views'],
             'LLM Integration': ['llm-keyword-extraction']
         }
         
@@ -857,6 +858,134 @@ def show_cluster(connection: str, cluster_id: str, detailed: bool, exclude_main:
             click.echo(ddl)
         else:
             click.echo("❌ No DDL found for this cluster")
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
+@click.option('--views', '-v', required=True, help='Comma-separated list of view names to explore')
+@click.option('--detailed/--basic', default=True, help='Show detailed column information including data types')
+@backend_options
+def explore_view(connection: str, views: str, detailed: bool, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
+    """Get detailed information about specific database views from Neo4j graph."""
+    try:
+        # Ensure Neo4j environment variables are set for MCP tools
+        if not os.getenv('NEO4J_PASSWORD'):
+            neo4j_password = neo4j_password or click.prompt("Neo4j password", hide_input=True)
+            os.environ['NEO4J_PASSWORD'] = neo4j_password
+        
+        if neo4j_uri:
+            os.environ['NEO4J_URI'] = neo4j_uri
+        if neo4j_user:
+            os.environ['NEO4J_USER'] = neo4j_user
+            
+        # Process view names (handle comma-separated input)
+        view_names = [v.strip() for v in views.split(',') if v.strip()]
+        
+        if not view_names:
+            click.echo("❌ No view names provided", err=True)
+            sys.exit(1)
+            
+        click.echo(f"🔍 Getting DDL for {len(view_names)} view(s) from Neo4j graph...")
+        
+        # Call MCP tool to get view DDL
+        from .mcp_server import explore_view as mcp_explore_view
+        result = mcp_explore_view(','.join(view_names), detailed)
+        
+        if not result.get('result', {}).get('success', False):
+            error_msg = result.get('result', {}).get('error', 'Unknown error')
+            click.echo(f"❌ Error: {error_msg}", err=True)
+            if 'Neo4j' in error_msg:
+                click.echo("💡 Make sure Neo4j is running and you have run 'rkg analyze' to build the graph first")
+            sys.exit(1)
+        
+        # Handle missing views and non-views
+        result_data = result.get('result', {})
+        missing_views = result_data.get('missing_views', [])
+        non_views = result_data.get('non_views', [])
+        
+        if missing_views:
+            click.echo(f"⚠️  Views not found in Neo4j: {', '.join(missing_views)}")
+            
+        if non_views:
+            click.echo(f"ℹ️  These are tables, not views: {', '.join(non_views)}")
+            click.echo("💡 Use 'rkg explore-table' for tables instead")
+            
+        if missing_views or non_views:
+            click.echo()
+        
+        # Display DDL
+        ddl = result_data.get('ddl', '')
+        if ddl:
+            views_found = result_data.get('views_found', 0)
+            click.echo(f"📋 Found {views_found} view(s) in Neo4j graph:")
+            click.echo()
+            click.echo(ddl)
+        else:
+            click.echo("❌ No view DDL found")
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
+@click.option('--tables', '-t', required=True, help='Comma-separated list of table names to find related views for')
+@click.option('--max-suggestions', '-m', default=5, help='Maximum number of view suggestions')
+@backend_options
+def find_related_views(connection: str, tables: str, max_suggestions: int, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
+    """Find database views related to specific tables for statistics and reporting."""
+    try:
+        # Ensure Neo4j environment variables are set for MCP tools
+        if not os.getenv('NEO4J_PASSWORD'):
+            neo4j_password = neo4j_password or click.prompt("Neo4j password", hide_input=True)
+            os.environ['NEO4J_PASSWORD'] = neo4j_password
+        
+        if neo4j_uri:
+            os.environ['NEO4J_URI'] = neo4j_uri
+        if neo4j_user:
+            os.environ['NEO4J_USER'] = neo4j_user
+            
+        # Process table names
+        table_names = [t.strip() for t in tables.split(',') if t.strip()]
+        
+        if not table_names:
+            click.echo("❌ No table names provided", err=True)
+            sys.exit(1)
+            
+        click.echo(f"🔍 Finding views related to: {', '.join(table_names)}")
+        
+        # Call MCP tool to find related views
+        from .mcp_server import find_related_views as mcp_find_related_views
+        result = mcp_find_related_views(','.join(table_names), max_suggestions)
+        
+        if not result.get('success', False):
+            error_msg = result.get('error', 'Unknown error')
+            click.echo(f"❌ Error: {error_msg}", err=True)
+            if 'Neo4j' in error_msg:
+                click.echo("💡 Make sure Neo4j is running and you have run 'rkg analyze' to build the graph first")
+            sys.exit(1)
+        
+        # Display results
+        related_views = result.get('related_views', [])
+        
+        if not related_views:
+            message = result.get('message', 'No related views found')
+            click.echo(f"❌ {message}")
+            click.echo("💡 Try with different tables or check that views exist in your database")
+            return
+        
+        total_found = result.get('total_found', len(related_views))
+        click.echo(f"\\n📊 Found {total_found} related view(s):")
+        
+        for i, view_name in enumerate(related_views, 1):
+            click.echo(f"  {i}. {view_name}")
+        
+        click.echo(f"\\n💡 Use 'rkg explore-view -v \"{','.join(related_views[:3])}\"' to get DDL for these views")
         
     except Exception as e:
         click.echo(f"❌ Error: {e}", err=True)
