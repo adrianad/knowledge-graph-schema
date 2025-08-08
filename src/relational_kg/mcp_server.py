@@ -5,6 +5,7 @@ import sys
 import logging
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
+from pydantic import Field
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -55,7 +56,9 @@ def _get_analyzer() -> SchemaAnalyzer:
 
 
 @mcp.tool()
-def explore_table(table_names: str) -> Dict[str, Any]:
+def explore_table(
+    table_names: str = Field(description="Comma-separated list of table names to explore")
+) -> Dict[str, Any]:
     """Get detailed information about specific tables from Neo4j graph.
     
     Args:
@@ -117,7 +120,9 @@ def explore_table(table_names: str) -> Dict[str, Any]:
 
 
 @mcp.tool() 
-def list_clusters(exclude_main: bool = True) -> Dict[str, Any]:
+def list_clusters(
+    exclude_main: bool = Field(default=True, description="Whether to exclude the clusters that make up the main cluster")
+) -> Dict[str, Any]:
     """List all available table clusters from Neo4j.
     
     Args:
@@ -140,8 +145,23 @@ def list_clusters(exclude_main: bool = True) -> Dict[str, Any]:
             main_cluster_size = int(os.getenv('MAIN_CLUSTER_SIZE', '2'))
             
             if clusters and len(clusters) >= main_cluster_size:
+                # Get main cluster tables for filtering
+                main_cluster_tables = set()
+                for i in range(main_cluster_size):
+                    main_tables = clusters[i].get('tables', [])
+                    main_cluster_tables.update(main_tables)
+                
                 # Skip the first N clusters (they make up the main cluster)
-                clusters = clusters[main_cluster_size:]
+                remaining_clusters = clusters[main_cluster_size:]
+                
+                # Filter main cluster tables from remaining clusters
+                for cluster in remaining_clusters:
+                    cluster_tables = cluster.get('tables', [])
+                    filtered_tables = [table for table in cluster_tables 
+                                     if table not in main_cluster_tables]
+                    cluster['tables'] = filtered_tables
+                
+                clusters = remaining_clusters
         
         result = {
             "success": True,
@@ -165,7 +185,11 @@ def list_clusters(exclude_main: bool = True) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def show_cluster(cluster_id: str, detailed: bool = False, exclude_main: bool = True) -> Dict[str, Any]:
+def show_cluster(
+    cluster_id: str = Field(description="The cluster ID to show details for"),
+    detailed: bool = Field(default=False, description="Whether to include detailed column information for tables"),
+    exclude_main: bool = Field(default=True, description="Whether to exclude tables that are in the main cluster")
+) -> Dict[str, Any]:
     """Show detailed information about a specific cluster.
     
     Args:
@@ -260,7 +284,9 @@ def show_cluster(cluster_id: str, detailed: bool = False, exclude_main: bool = T
 
 
 @mcp.tool()
-def get_main_cluster(detailed: bool = False) -> Dict[str, Any]:
+def get_main_cluster(
+    detailed: bool = Field(default=False, description="Whether to include detailed DDL information")
+) -> Dict[str, Any]:
     """Get the main cluster (union of top N most important clusters) without duplicates.
     
     Args:
@@ -345,7 +371,10 @@ def get_main_cluster(detailed: bool = False) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def find_path(tables: str, max_hops: int = 3) -> Dict[str, Any]:
+def find_path(
+    tables: str = Field(description="Comma-separated list of tables to find connections between"),
+    max_hops: int = Field(default=3, description="Maximum relationship hops to explore")
+) -> Dict[str, Any]:
     """Find all connection paths between the given tables.
     
     Args:
@@ -413,7 +442,12 @@ def find_path(tables: str, max_hops: int = 3) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def suggest_joins(base_tables: str, max_suggestions: int = 5, max_hops: int = 1, per_table: bool = False) -> Dict[str, Any]:
+def suggest_joins(
+    base_tables: str = Field(description="Comma-separated list of base tables to suggest joins for"),
+    max_suggestions: int = Field(default=5, description="Maximum number of suggestions to return"),
+    max_hops: int = Field(default=1, description="Maximum relationship hops to explore (1=direct, 2=two-hop, etc.)"),
+    per_table: bool = Field(default=False, description="If True, return suggestions organized per base table; if False, return combined results")
+) -> Dict[str, Any]:
     """Suggest additional tables that could be joined with the given base tables.
     
     Args:
@@ -546,7 +580,9 @@ def suggest_joins(base_tables: str, max_suggestions: int = 5, max_hops: int = 1,
 
 
 @mcp.tool()
-def explore_view(view_names: str) -> Dict[str, Any]:
+def explore_view(
+    view_names: str = Field(description="Comma-separated list of view names to explore")
+) -> Dict[str, Any]:
     """Get detailed information about specific database views for statistics and reporting.
     
     Args:
@@ -611,7 +647,9 @@ def explore_view(view_names: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def find_related_views(table_names: str) -> Dict[str, Any]:
+def find_related_views(
+    table_names: str = Field(description="Comma-separated list of table names to find related views for")
+) -> Dict[str, Any]:
     """Find database views related to specific tables for statistics and reporting queries.
     
     Args:
