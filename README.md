@@ -12,6 +12,7 @@ A Python application that extracts database schemas and creates knowledge graphs
   - Importance-based clustering around hub tables
   - Overlapping clusters for realistic business modeling
 - **LLM Integration**: Automatic cluster naming, keyword extraction, and semantic analysis
+- **Path Discovery**: Find all connection paths between specific tables for SQL JOIN planning
 - **Smart Analysis**: Finds relevant tables based on keywords and natural language queries
 - **Visualization**: Interactive Plotly graphs and static matplotlib plots
 - **CLI Interface**: Comprehensive command line tools for all operations
@@ -78,10 +79,22 @@ rkg get-main-cluster --detailed
 rkg list-clusters --exclude-main
 ```
 
-### Get Join Suggestions
+### Find Connection Paths Between Tables
 ```bash
-# Suggest tables to join with existing ones
-rkg suggest-joins -c "sqlite:///shop.db" -t "orders,customers"
+# Find all connections between specific tables (most useful for LLM query planning)
+rkg find-path -t "users,orders,products" --max-hops 3
+
+# Get complete connection map for a set of related tables
+rkg find-path -t "customers,invoices,payments,products" --max-hops 2
+```
+
+### Get Join Suggestions  
+```bash
+# Suggest tables to join with existing ones (traditional approach)
+rkg suggest-joins -c "sqlite:///shop.db" -t "orders,customers" --max-hops 2
+
+# Get suggestions organized per base table
+rkg suggest-joins -c "sqlite:///shop.db" -t "orders,customers" --per-table
 ```
 
 ### Generate Visualizations
@@ -194,9 +207,15 @@ The application is built with a modular, extensible architecture:
 
 ### For LLM SQL Generation
 1. Extract schema and build knowledge graph
-2. Use keywords to find relevant tables
-3. Export focused schema subset
-4. Provide subset to LLM for accurate SQL generation
+2. Get main cluster or find relevant table clusters  
+3. Use `find-path` to discover JOIN patterns between target tables
+4. Export focused schema subset with connection paths
+5. Provide subset to LLM for accurate SQL generation
+
+### Database Query Planning
+- **find-path**: Get complete connection map for specific tables (ideal for JOIN construction)
+- **suggest-joins**: Discover additional tables based on importance (good for exploration)
+- **get-main-cluster**: Start with most important tables for LLM context optimization
 
 ### Schema Understanding
 - Visualize complex database relationships

@@ -15,6 +15,40 @@ from .llm_extractor import LLMKeywordExtractor
 from .llm_cluster_analyzer import LLMClusterAnalyzer
 
 
+class CategorizedGroup(click.Group):
+    """Custom Click group that displays commands organized by category."""
+    
+    def format_commands(self, ctx, formatter):
+        """Format commands grouped by category."""
+        # Define command categories
+        categories = {
+            'Schema Analysis': ['analyze', 'summary'],
+            'Clustering': ['create-clusters', 'list-clusters', 'show-cluster', 'get-main-cluster'],
+            'Table Exploration': ['explore-table', 'find-path', 'suggest-joins'],
+            'LLM Integration': ['llm-keyword-extraction']
+        }
+        
+        # Get all commands
+        commands = {}
+        for subcommand in self.list_commands(ctx):
+            cmd = self.get_command(ctx, subcommand)
+            if cmd is not None:
+                commands[subcommand] = cmd
+
+        # Display commands by category
+        for category, cmd_names in categories.items():
+            category_commands = [(name, commands[name]) for name in cmd_names if name in commands]
+            
+            if category_commands:
+                formatter.write(f"\n{category}:\n")
+                # Calculate the longest command name for alignment
+                max_len = max(len(name) for name, _ in category_commands)
+                
+                for cmd_name, cmd in category_commands:
+                    help_text = cmd.get_short_help_str(limit=45)
+                    formatter.write(f"  {cmd_name:<{max_len}}  {help_text}\n")
+
+
 # Load environment variables
 load_dotenv()
 
@@ -102,7 +136,7 @@ def backend_options(f):
     return f
 
 
-@click.group()
+@click.group(cls=CategorizedGroup)
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose logging')
 def main(verbose: bool) -> None:
     """Relational Knowledge Graph CLI for database schema analysis."""
