@@ -334,17 +334,76 @@ class Neo4jBackend(GraphBackend):
             record = result.single()
             return record['path'] if record else None
     
-    def get_table_neighbors(self, table_name: str) -> Set[str]:
-        """Get direct neighbors of a table/view."""
+    def get_table_neighbors(self, table_name: str, max_hops: int = 1) -> Set[str]:
+        """Get neighbors of a table/view within max_hops distance."""
         with self.driver.session() as session:
-            result = session.run("""
-                MATCH (t {name: $table_name})
-                OPTIONAL MATCH (t)-[]-(neighbor)
-                WHERE neighbor.name IS NOT NULL
-                RETURN DISTINCT neighbor.name as neighbor_name
-            """, table_name=table_name)
+            if max_hops == 1:
+                # Optimized query for direct neighbors only
+                result = session.run("""
+                    MATCH (t {name: $table_name})
+                    OPTIONAL MATCH (t)-[]-(neighbor)
+                    WHERE neighbor.name IS NOT NULL
+                    RETURN DISTINCT neighbor.name as neighbor_name
+                """, table_name=table_name)
+            else:
+                # Multi-hop neighbor discovery
+                result = session.run("""
+                    MATCH (t {name: $table_name})
+                    CALL {
+                        WITH t
+                        MATCH path = (t)-[*1..%d]-(neighbor)
+                        WHERE neighbor.name IS NOT NULL 
+                        AND neighbor.name <> $table_name
+                        RETURN DISTINCT neighbor.name as neighbor_name
+                    }
+                    RETURN DISTINCT neighbor_name
+                """ % max_hops, table_name=table_name)
             
             return {record['neighbor_name'] for record in result if record['neighbor_name']}
+    
+    def get_table_neighbors_batch(self, table_names: List[str], max_hops: int = 1) -> Dict[str, Set[str]]:
+        """Get neighbors for multiple tables in a single query."""
+        if not table_names:
+            return {}
+            
+        with self.driver.session() as session:
+            if max_hops == 1:
+                # Optimized batch query for direct neighbors
+                result = session.run("""
+                    UNWIND $table_names AS table_name
+                    MATCH (t {name: table_name})
+                    OPTIONAL MATCH (t)-[]-(neighbor)
+                    WHERE neighbor.name IS NOT NULL
+                    RETURN table_name, collect(DISTINCT neighbor.name) as neighbors
+                """, table_names=table_names)
+            else:
+                # Multi-hop batch neighbor discovery
+                result = session.run("""
+                    UNWIND $table_names AS table_name
+                    MATCH (t {name: table_name})
+                    CALL {
+                        WITH t, table_name
+                        MATCH path = (t)-[*1..%d]-(neighbor)
+                        WHERE neighbor.name IS NOT NULL 
+                        AND neighbor.name <> table_name
+                        RETURN DISTINCT neighbor.name as neighbor_name
+                    }
+                    RETURN table_name, collect(DISTINCT neighbor_name) as neighbors
+                """ % max_hops, table_names=table_names)
+            
+            # Convert to dictionary format
+            batch_results = {}
+            for record in result:
+                table_name = record['table_name']
+                neighbors = {n for n in record['neighbors'] if n}
+                batch_results[table_name] = neighbors
+                
+            # Ensure all requested tables have entries (even if empty)
+            for table_name in table_names:
+                if table_name not in batch_results:
+                    batch_results[table_name] = set()
+                    
+            return batch_results
     
     def get_all_tables(self) -> Set[str]:
         """Get all table and view names in the graph."""

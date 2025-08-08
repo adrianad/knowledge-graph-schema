@@ -57,26 +57,64 @@ class SchemaAnalyzer:
     def suggest_tables_for_join(
         self, 
         base_tables: List[str], 
-        max_suggestions: int = 5
-    ) -> List[str]:
-        """Suggest additional tables that could be joined with base tables."""
+        max_suggestions: int = 5,
+        max_hops: int = 1
+    ) -> Dict[str, List[str]]:
+        """Suggest additional tables that could be joined with base tables.
+        
+        Returns:
+            Dict mapping each base table to its top suggestions
+        """
         # Neo4j backend can work directly without schema analysis
-        suggestions = set()
+        base_table_suggestions = {}
         
-        for table in base_tables:
-            # Get neighbors (direct relationships) from Neo4j
-            neighbors = self.backend.get_table_neighbors(table)
-            suggestions.update(neighbors)
+        # Use batch query for efficiency when available
+        if hasattr(self.backend, 'get_table_neighbors_batch'):
+            neighbor_results = self.backend.get_table_neighbors_batch(base_tables, max_hops)
+        else:
+            # Fallback to individual queries
+            neighbor_results = {}
+            for table in base_tables:
+                neighbor_results[table] = self.backend.get_table_neighbors(table, max_hops)
         
-        # Remove base tables from suggestions
-        suggestions = suggestions - set(base_tables)
-        
-        # Score suggestions by importance
+        # Get importance scores once
         importance_scores = self.backend.get_table_importance()
         
-        # Sort by importance and return top suggestions
+        # Generate suggestions per base table
+        for base_table in base_tables:
+            neighbors = neighbor_results.get(base_table, set())
+            # Remove other base tables from suggestions
+            table_suggestions = neighbors - set(base_tables)
+            
+            # Sort by importance and take top suggestions per table
+            sorted_suggestions = sorted(
+                table_suggestions, 
+                key=lambda x: importance_scores.get(x, 0), 
+                reverse=True
+            )
+            
+            base_table_suggestions[base_table] = sorted_suggestions[:max_suggestions]
+        
+        return base_table_suggestions
+    
+    def suggest_tables_for_join_combined(
+        self, 
+        base_tables: List[str], 
+        max_suggestions: int = 5,
+        max_hops: int = 1
+    ) -> List[str]:
+        """Suggest additional tables (combined results) that could be joined with base tables."""
+        per_table_suggestions = self.suggest_tables_for_join(base_tables, max_suggestions, max_hops)
+        
+        # Combine all suggestions and deduplicate
+        all_suggestions = set()
+        for suggestions in per_table_suggestions.values():
+            all_suggestions.update(suggestions)
+        
+        # Score and sort combined suggestions
+        importance_scores = self.backend.get_table_importance()
         sorted_suggestions = sorted(
-            suggestions, 
+            all_suggestions, 
             key=lambda x: importance_scores.get(x, 0), 
             reverse=True
         )

@@ -177,8 +177,10 @@ def analyze(connection: str, output: Optional[str], neo4j_uri: str, neo4j_user: 
 @click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
 @click.option('--tables', '-t', required=True, help='Comma-separated list of base tables')
 @click.option('--max-suggestions', '-m', default=5, help='Maximum number of suggestions')
+@click.option('--max-hops', '-h', default=1, help='Maximum relationship hops to explore (1=direct, 2=two-hop, etc.)')
+@click.option('--per-table', is_flag=True, help='Show suggestions per base table instead of combined results')
 @backend_options
-def suggest_joins(connection: str, tables: str, max_suggestions: int, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
+def suggest_joins(connection: str, tables: str, max_suggestions: int, max_hops: int, per_table: bool, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
     """Suggest tables that could be joined with the given base tables."""
     try:
         # Use DATABASE_URL from environment if connection not provided
@@ -191,24 +193,58 @@ def suggest_joins(connection: str, tables: str, max_suggestions: int, neo4j_uri:
         # Skip schema rebuild - use existing Neo4j graph
         
         base_tables = [t.strip() for t in tables.split(',')]
-        click.echo(f"🔗 Finding join suggestions for: {', '.join(base_tables)}")
+        hops_desc = "direct relationships" if max_hops == 1 else f"up to {max_hops}-hop relationships"
+        mode_desc = "per-table analysis" if per_table else "combined results"
+        click.echo(f"🔗 Finding join suggestions for: {', '.join(base_tables)} (exploring {hops_desc}, {mode_desc})")
         
-        suggestions = analyzer.suggest_tables_for_join(base_tables, max_suggestions)
-        
-        if not suggestions:
-            click.echo("❌ No join suggestions found")
-            return
-        
-        click.echo(f"\\n💡 Suggested tables to join:")
-        for i, table in enumerate(suggestions, 1):
-            click.echo(f"{i}. {table}")
+        if per_table:
+            # Per-table mode: show suggestions organized by base table
+            suggestions_per_table = analyzer.suggest_tables_for_join(base_tables, max_suggestions, max_hops)
             
-            # Show connection paths
+            if not any(suggestions_per_table.values()):
+                click.echo(f"❌ No join suggestions found within {max_hops} hops")
+                return
+            
+            click.echo(f"\\n💡 Join suggestions by base table (up to {max_suggestions} per table):")
             for base_table in base_tables:
-                path = analyzer.find_connection_path(base_table, table)
-                if path and len(path) > 1:
-                    path_str = " → ".join(path)
-                    click.echo(f"   └─ Path from {base_table}: {path_str}")
+                table_suggestions = suggestions_per_table.get(base_table, [])
+                if table_suggestions:
+                    click.echo(f"\\n📋 From '{base_table}':")
+                    for i, table in enumerate(table_suggestions, 1):
+                        path = analyzer.find_connection_path(base_table, table, max_hops)
+                        if path and len(path) > 1:
+                            distance = len(path) - 1
+                            distance_desc = f"{distance}-hop" if distance > 1 else "direct"
+                            path_str = " → ".join(path)
+                            click.echo(f"  {i}. {table} ({distance_desc}: {path_str})")
+                        else:
+                            click.echo(f"  {i}. {table}")
+                else:
+                    click.echo(f"\\n📋 From '{base_table}': No suggestions found")
+        else:
+            # Combined mode: show top suggestions across all base tables
+            suggestions = analyzer.suggest_tables_for_join_combined(base_tables, max_suggestions, max_hops)
+            
+            if not suggestions:
+                click.echo(f"❌ No join suggestions found within {max_hops} hops")
+                return
+            
+            click.echo(f"\\n💡 Top {len(suggestions)} suggested tables to join:")
+            for i, table in enumerate(suggestions, 1):
+                click.echo(f"{i}. {table}")
+                
+                # Show connection paths from each base table
+                paths_shown = set()
+                for base_table in base_tables:
+                    path = analyzer.find_connection_path(base_table, table, max_hops)
+                    if path and len(path) > 1:
+                        path_str = " → ".join(path)
+                        # Avoid duplicate paths
+                        if path_str not in paths_shown:
+                            distance = len(path) - 1
+                            distance_desc = f"{distance}-hop" if distance > 1 else "direct"
+                            click.echo(f"   └─ {distance_desc} path from {base_table}: {path_str}")
+                            paths_shown.add(path_str)
         
         analyzer.close()
         
