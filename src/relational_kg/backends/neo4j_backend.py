@@ -355,12 +355,15 @@ class Neo4jBackend(GraphBackend):
                 MATCH path = shortestPath((t1)-[*1..%d]-(t2))
                 WHERE path IS NOT NULL
                 
-                WITH table1, table2, path,
+                WITH table1, table2, 
                      [n in nodes(path) | n.name] as path_nodes,
                      length(path) as distance
-                
-                RETURN table1, table2, path_nodes, distance
                 ORDER BY table1, table2, distance
+                
+                // Take only the first (shortest) path for each table pair
+                WITH table1, table2, head(collect({path_nodes: path_nodes, distance: distance})) as shortest_path
+                
+                RETURN table1, table2, shortest_path.path_nodes as path_nodes, shortest_path.distance as distance
             """ % max_hops, tables=tables)
             
             connections = []
