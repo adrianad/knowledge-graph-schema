@@ -334,6 +334,46 @@ class Neo4jBackend(GraphBackend):
             record = result.single()
             return record['path'] if record else None
     
+    def find_all_connections(self, tables: List[str], max_hops: int = 1) -> List[Dict[str, Any]]:
+        """Find all connections between any pair of tables in the given list.
+        
+        Returns list of connection info with table1, table2, path, and distance.
+        """
+        if len(tables) < 2:
+            return []
+            
+        with self.driver.session() as session:
+            result = session.run("""
+                UNWIND $tables AS table1
+                UNWIND $tables AS table2  
+                WITH table1, table2 
+                WHERE table1 < table2  // Avoid duplicates and self-connections
+                
+                MATCH (t1 {name: table1}), (t2 {name: table2})
+                WHERE t1 <> t2  // Extra safety: ensure different nodes
+                
+                MATCH path = shortestPath((t1)-[*1..%d]-(t2))
+                WHERE path IS NOT NULL
+                
+                WITH table1, table2, path,
+                     [n in nodes(path) | n.name] as path_nodes,
+                     length(path) as distance
+                
+                RETURN table1, table2, path_nodes, distance
+                ORDER BY table1, table2, distance
+            """ % max_hops, tables=tables)
+            
+            connections = []
+            for record in result:
+                connections.append({
+                    'table1': record['table1'],
+                    'table2': record['table2'], 
+                    'path': record['path_nodes'],
+                    'distance': record['distance']
+                })
+                
+            return connections
+    
     def get_table_neighbors(self, table_name: str, max_hops: int = 1) -> Set[str]:
         """Get neighbors of a table/view within max_hops distance."""
         with self.driver.session() as session:

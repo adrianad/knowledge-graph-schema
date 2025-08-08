@@ -253,6 +253,70 @@ def suggest_joins(connection: str, tables: str, max_suggestions: int, max_hops: 
         sys.exit(1)
 
 
+@main.command()
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
+@click.option('--tables', '-t', required=True, help='Comma-separated list of tables to find connections between')
+@click.option('--max-hops', '-h', default=3, help='Maximum relationship hops to explore (default: 3)')
+@backend_options
+def find_path(connection: str, tables: str, max_hops: int, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
+    """Find all connection paths between the given tables."""
+    try:
+        # Use DATABASE_URL from environment if connection not provided
+        connection_final = connection or os.getenv('DATABASE_URL')
+        if not connection_final:
+            click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
+            sys.exit(1)
+            
+        analyzer = _create_analyzer(connection_final, neo4j_uri, neo4j_user, neo4j_password)
+        # Skip schema rebuild - use existing Neo4j graph
+        
+        table_list = [t.strip() for t in tables.split(',')]
+        
+        if len(table_list) < 2:
+            click.echo("❌ At least 2 tables are required to find connections", err=True)
+            sys.exit(1)
+            
+        hops_desc = f"up to {max_hops}-hop" if max_hops > 1 else "direct"
+        click.echo(f"🔍 Finding all connections between: {', '.join(table_list)} (exploring {hops_desc} relationships)")
+        
+        connections = analyzer.find_all_connections(table_list, max_hops)
+        
+        if not connections:
+            click.echo(f"❌ No connections found between these tables within {max_hops} hops")
+            click.echo("💡 Try increasing --max-hops or check that the tables exist in the Neo4j graph")
+            return
+        
+        # Group connections by distance for better organization
+        connections_by_distance = {}
+        for conn in connections:
+            distance = conn['distance']
+            if distance not in connections_by_distance:
+                connections_by_distance[distance] = []
+            connections_by_distance[distance].append(conn)
+        
+        total_pairs = len(table_list) * (len(table_list) - 1) // 2  # n choose 2
+        click.echo(f"\\n📋 Found {len(connections)} connections out of {total_pairs} possible pairs:")
+        
+        # Display connections grouped by distance
+        for distance in sorted(connections_by_distance.keys()):
+            distance_desc = "Direct connections" if distance == 1 else f"{distance}-hop connections"
+            conns = connections_by_distance[distance]
+            
+            click.echo(f"\\n🔗 {distance_desc} ({len(conns)}):")
+            for conn in conns:
+                path_str = " → ".join(conn['path'])
+                click.echo(f"  • {conn['table1']} ↔ {conn['table2']}: {path_str}")
+        
+        # Show summary statistics
+        if len(connections) < total_pairs:
+            missing = total_pairs - len(connections)
+            click.echo(f"\\n⚠️  {missing} table pair(s) have no connection within {max_hops} hops")
+            
+        analyzer.close()
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
 
 
 @main.command()

@@ -126,6 +126,26 @@ class SchemaAnalyzer:
         # Neo4j backend can work directly without schema analysis
         return self.backend.find_shortest_path(table1, table2, max_hops)
     
+    def find_all_connections(self, tables: List[str], max_hops: int = 1) -> List[Dict[str, Any]]:
+        """Find all connections between any pair of tables in the given list."""
+        # Neo4j backend can work directly without schema analysis
+        if hasattr(self.backend, 'find_all_connections'):
+            return self.backend.find_all_connections(tables, max_hops)
+        else:
+            # Fallback: use individual path finding for each pair
+            connections = []
+            for i, table1 in enumerate(tables):
+                for table2 in tables[i+1:]:
+                    path = self.find_connection_path(table1, table2, max_hops)
+                    if path:
+                        connections.append({
+                            'table1': table1,
+                            'table2': table2,
+                            'path': path,
+                            'distance': len(path) - 1
+                        })
+            return connections
+    
     def get_schema_summary(self) -> Dict[str, Any]:
         """Get summary of the database schema."""
         if not self._connected:
