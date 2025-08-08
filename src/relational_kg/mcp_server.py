@@ -7,11 +7,8 @@ from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from pydantic import Field
 
-try:
-    from mcp.server.fastmcp import FastMCP
-    MCP_AVAILABLE = True
-except ImportError:
-    MCP_AVAILABLE = False
+from mcp.server.fastmcp import FastMCP
+MCP_AVAILABLE = True
 
 from .analyzer import SchemaAnalyzer
 
@@ -27,10 +24,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Initialize MCP server
-if not MCP_AVAILABLE:
-    logger.error("MCP package not available. Install with: pip install 'mcp[cli]'")
-    sys.exit(1)
-
 mcp = FastMCP("Knowledge Graph Server")
 
 def _get_analyzer() -> SchemaAnalyzer:
@@ -55,7 +48,7 @@ def _get_analyzer() -> SchemaAnalyzer:
     return analyzer
 
 
-@mcp.tool()
+@mcp.tool(description="Get detailed information about specific tables from Neo4j graph")
 def explore_table(
     table_names: str = Field(description="Comma-separated list of table names to explore")
 ) -> Dict[str, Any]:
@@ -119,7 +112,7 @@ def explore_table(
         }}
 
 
-@mcp.tool() 
+@mcp.tool(description="List all available table clusters from Neo4j")
 def list_clusters(
     exclude_main: bool = Field(default=True, description="Whether to exclude the clusters that make up the main cluster")
 ) -> Dict[str, Any]:
@@ -184,7 +177,7 @@ def list_clusters(
         }
 
 
-@mcp.tool()
+@mcp.tool(description="Show detailed information about a specific cluster")
 def show_cluster(
     cluster_id: str = Field(description="The cluster ID to show details for"),
     detailed: bool = Field(default=False, description="Whether to include detailed column information for tables"),
@@ -283,7 +276,7 @@ def show_cluster(
         }}
 
 
-@mcp.tool()
+@mcp.tool(description="Get the main cluster (union of top N most important clusters) without duplicates")
 def get_main_cluster(
     detailed: bool = Field(default=False, description="Whether to include detailed DDL information")
 ) -> Dict[str, Any]:
@@ -370,7 +363,7 @@ def get_main_cluster(
         }
 
 
-@mcp.tool()
+@mcp.tool(description="Find all connection paths between the given tables")
 def find_path(
     tables: str = Field(description="Comma-separated list of tables to find connections between"),
     max_hops: int = Field(default=3, description="Maximum relationship hops to explore")
@@ -441,7 +434,7 @@ def find_path(
         }
 
 
-@mcp.tool()
+@mcp.tool(description="Suggest additional tables that could be joined with the given base tables")
 def suggest_joins(
     base_tables: str = Field(description="Comma-separated list of base tables to suggest joins for"),
     max_suggestions: int = Field(default=5, description="Maximum number of suggestions to return"),
@@ -579,7 +572,7 @@ def suggest_joins(
         }
 
 
-@mcp.tool()
+@mcp.tool(description="Get detailed information about specific database views for statistics and reporting")
 def explore_view(
     view_names: str = Field(description="Comma-separated list of view names to explore")
 ) -> Dict[str, Any]:
@@ -646,7 +639,7 @@ def explore_view(
         }}
 
 
-@mcp.tool()
+@mcp.tool(description="Find database views related to specific tables for statistics and reporting queries")
 def find_related_views(
     table_names: str = Field(description="Comma-separated list of table names to find related views for")
 ) -> Dict[str, Any]:
