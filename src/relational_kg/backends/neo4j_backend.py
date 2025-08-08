@@ -730,7 +730,7 @@ class Neo4jBackend(GraphBackend):
                        c.keywords as keywords,
                        c.size as size,
                        collect(t.name) as table_names
-                ORDER BY c.name
+                ORDER BY toInteger(c.id)
             """)
             
             clusters = []

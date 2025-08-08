@@ -118,8 +118,11 @@ def explore_table(table_names: str, detailed: bool = True) -> Dict[str, Any]:
 
 
 @mcp.tool() 
-def list_clusters() -> Dict[str, Any]:
+def list_clusters(exclude_main: bool = True) -> Dict[str, Any]:
     """List all available table clusters from Neo4j.
+    
+    Args:
+        exclude_main: Whether to exclude the clusters that make up the main cluster
     
     Returns:
         Dictionary containing all clusters with their basic information
@@ -131,6 +134,15 @@ def list_clusters() -> Dict[str, Any]:
         
         # Get all clusters from Neo4j
         clusters = analyzer.backend.get_all_clusters()
+        
+        # Filter out main clusters if exclude_main is True
+        if exclude_main:
+            # Get main cluster size from environment
+            main_cluster_size = int(os.getenv('MAIN_CLUSTER_SIZE', '2'))
+            
+            if clusters and len(clusters) >= main_cluster_size:
+                # Skip the first N clusters (they make up the main cluster)
+                clusters = clusters[main_cluster_size:]
         
         result = {
             "success": True,
@@ -154,12 +166,13 @@ def list_clusters() -> Dict[str, Any]:
 
 
 @mcp.tool()
-def show_cluster(cluster_id: str, detailed: bool = False) -> Dict[str, Any]:
+def show_cluster(cluster_id: str, detailed: bool = False, exclude_main: bool = True) -> Dict[str, Any]:
     """Show detailed information about a specific cluster.
     
     Args:
         cluster_id: The cluster ID to show details for
         detailed: Whether to include detailed column information for tables
+        exclude_main: Whether to exclude tables that are in the main cluster
         
     Returns:
         Dictionary containing detailed cluster information and its tables
@@ -181,6 +194,24 @@ def show_cluster(cluster_id: str, detailed: bool = False) -> Dict[str, Any]:
                 "error": f"Cluster '{cluster_id}' not found",
                 "help": "Use list_clusters to see available cluster IDs"
             }}
+        
+        # Filter out main cluster tables if exclude_main is True
+        if exclude_main:
+            # Get main cluster size from environment
+            main_cluster_size = int(os.getenv('MAIN_CLUSTER_SIZE', '2'))
+            
+            # Get all clusters to find main cluster tables
+            all_clusters = analyzer.backend.get_all_clusters()
+            main_cluster_tables = set()
+            
+            if all_clusters and len(all_clusters) >= main_cluster_size:
+                for i in range(main_cluster_size):
+                    cluster_tables = all_clusters[i].get('tables', [])
+                    main_cluster_tables.update(cluster_tables)
+            
+            # Filter out main cluster tables
+            tables_ddl = [table for table in tables_ddl 
+                         if table['name'] not in main_cluster_tables]
         
         # Get cluster metadata
         all_clusters = analyzer.backend.get_all_clusters()
@@ -220,6 +251,94 @@ def show_cluster(cluster_id: str, detailed: bool = False) -> Dict[str, Any]:
             "error": str(e),
             "help": "Make sure Neo4j is running and the cluster exists"
         }}
+
+
+@mcp.tool()
+def get_main_cluster(detailed: bool = False) -> Dict[str, Any]:
+    """Get the main cluster (union of top N most important clusters) without duplicates.
+    
+    Args:
+        detailed: Whether to include detailed DDL information
+        
+    Returns:
+        Dictionary containing main cluster information and tables
+    """
+    try:
+        analyzer = _get_analyzer()
+        
+        # Get main cluster size from environment
+        main_cluster_size = int(os.getenv('MAIN_CLUSTER_SIZE', '2'))
+        
+        logger.info(f"Getting main cluster from top {main_cluster_size} clusters")
+        
+        # Get all clusters ordered by importance (first clusters are most important)
+        clusters = analyzer.backend.get_all_clusters()
+        
+        if not clusters:
+            return {
+                "success": False,
+                "error": "No clusters found in the database",
+                "help": "Use 'rkg create-clusters' to generate clusters first"
+            }
+        
+        if len(clusters) < main_cluster_size:
+            logger.warning(f"Only {len(clusters)} clusters available, using all of them")
+            main_cluster_size = len(clusters)
+        
+        # Get top clusters and combine their tables
+        main_cluster_tables = set()
+        used_clusters = []
+        
+        for i in range(main_cluster_size):
+            cluster = clusters[i]
+            cluster_tables = cluster.get('tables', [])
+            main_cluster_tables.update(cluster_tables)
+            used_clusters.append({
+                'id': cluster['id'],
+                'name': cluster['name'],
+                'table_count': len(cluster_tables)
+            })
+        
+        # Convert to sorted list for consistent output
+        main_cluster_tables = sorted(list(main_cluster_tables))
+        
+        if detailed:
+            # Get DDL for all tables
+            tables_ddl = analyzer.backend.get_table_ddl(main_cluster_tables)
+            
+            # Format DDL output
+            ddl_statements = []
+            for table in tables_ddl:
+                if not table.get('not_found', False):
+                    ddl_statements.append(f"-- {table['name']}")
+                    ddl_statements.append(table['ddl'])
+                    ddl_statements.append("")  # Empty line between tables
+            
+            result_ddl = "\n".join(ddl_statements).strip()
+        else:
+            result_ddl = None
+        
+        result = {
+            "success": True,
+            "main_cluster_size": main_cluster_size,
+            "used_clusters": used_clusters,
+            "table_count": len(main_cluster_tables),
+            "tables": main_cluster_tables
+        }
+        
+        if detailed:
+            result["ddl"] = result_ddl
+        
+        analyzer.close()
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in get_main_cluster: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "help": "Make sure Neo4j is running and clusters have been created"
+        }
 
 
 if __name__ == "__main__":

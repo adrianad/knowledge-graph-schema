@@ -39,26 +39,37 @@ def _call_mcp_explore_table(table_names_str: str, detailed: bool = True) -> dict
         return {"result": {"success": False, "error": str(e)}}
 
 
-def _call_mcp_list_clusters() -> dict:
+def _call_mcp_list_clusters(exclude_main: bool = True) -> dict:
     """Internal wrapper to call MCP list_clusters tool."""
     try:
         from .mcp_server import list_clusters as mcp_list_clusters
         
-        result = mcp_list_clusters()
+        result = mcp_list_clusters(exclude_main)
         return result
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
-def _call_mcp_show_cluster(cluster_id: str, detailed: bool = False) -> dict:
+def _call_mcp_show_cluster(cluster_id: str, detailed: bool = False, exclude_main: bool = True) -> dict:
     """Internal wrapper to call MCP show_cluster tool."""
     try:
         from .mcp_server import show_cluster as mcp_show_cluster
         
-        result = mcp_show_cluster(cluster_id, detailed)
+        result = mcp_show_cluster(cluster_id, detailed, exclude_main)
         return result
     except Exception as e:
         return {"result": {"success": False, "error": str(e)}}
+
+
+def _call_mcp_get_main_cluster(detailed: bool = False) -> dict:
+    """Internal wrapper to call MCP get_main_cluster tool."""
+    try:
+        from .mcp_server import get_main_cluster as mcp_get_main_cluster
+        
+        result = mcp_get_main_cluster(detailed)
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 def _create_analyzer(connection: str, neo4j_uri: str = None, neo4j_user: str = None, 
@@ -113,7 +124,7 @@ def analyze(connection: str, output: Optional[str], neo4j_uri: str, neo4j_user: 
             sys.exit(1)
             
         analyzer = _create_analyzer(connection_final, neo4j_uri, neo4j_user, neo4j_password)
-        click.echo(f"Analyzing database schema using {backend} backend...")
+        click.echo("Analyzing database schema using Neo4j backend...")
         
         analyzer.analyze_schema(include_views=include_views)
         
@@ -467,9 +478,9 @@ def explore_table(connection: str, table: tuple, detailed: bool, neo4j_uri: str,
 @click.option('--min-size', default=4, help='Minimum cluster size (importance method only)')
 @click.option('--max-hops', default=1, help='Maximum relationship hops (importance method only)')
 @click.option('--top-pct', default=0.05, help='Percentage of top tables to use as cores (importance method only)')
-@click.option('--no-llm', is_flag=True, help='Skip LLM analysis and use simple cluster naming')
+@click.option('--llm', is_flag=True, help='Enable LLM analysis for cluster naming and descriptions')
 @backend_options
-def create_clusters(connection: str, method: str, min_size: int, max_hops: int, top_pct: float, no_llm: bool, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
+def create_clusters(connection: str, method: str, min_size: int, max_hops: int, top_pct: float, llm: bool, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
     """Calculate and store table clusters in Neo4j database."""
     try:
         # Use DATABASE_URL from environment if connection not provided
@@ -478,10 +489,7 @@ def create_clusters(connection: str, method: str, min_size: int, max_hops: int, 
             click.echo("❌ Database connection required: use -c/--connection or set DATABASE_URL environment variable", err=True)
             sys.exit(1)
         
-        # Force Neo4j backend for cluster storage
-        if backend != 'neo4j':
-            click.echo("⚠️  Cluster storage requires Neo4j backend, switching to Neo4j...")
-            backend = 'neo4j'
+        # Using Neo4j backend for cluster storage
             
         analyzer = _create_analyzer(connection_final, neo4j_uri, neo4j_user, neo4j_password)
         
@@ -530,8 +538,8 @@ def create_clusters(connection: str, method: str, min_size: int, max_hops: int, 
                 cluster_tables += f" ... (+{len(cluster) - 5} more)"
             click.echo(f"  {cluster_name}: {cluster_size} tables - {cluster_tables}")
         
-        if no_llm:
-            click.echo("💾 Storing clusters with simple naming (--no-llm mode)...")
+        if not llm:
+            click.echo("💾 Storing clusters with simple naming (default mode)...")
             analyzer.backend.store_table_clusters(clusters)
         else:
             click.echo("🤖 Analyzing clusters with LLM for naming and descriptions...")
@@ -687,8 +695,67 @@ def find_tables_semantic(connection: str, query: str, max_tables: int, max_views
 
 @main.command()
 @click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
+@click.option('--detailed', '-d', is_flag=True, help='Show detailed DDL instead of just table names')
 @backend_options
-def list_clusters(connection: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
+def get_main_cluster(connection: str, detailed: bool, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
+    """Get the main cluster (union of top N most important clusters) without duplicates."""
+    try:
+        # Ensure Neo4j environment variables are set for MCP tools
+        if not os.getenv('NEO4J_PASSWORD'):
+            neo4j_password = neo4j_password or click.prompt("Neo4j password", hide_input=True)
+            os.environ['NEO4J_PASSWORD'] = neo4j_password
+        
+        if neo4j_uri:
+            os.environ['NEO4J_URI'] = neo4j_uri
+        if neo4j_user:
+            os.environ['NEO4J_USER'] = neo4j_user
+            
+        main_cluster_size = int(os.getenv('MAIN_CLUSTER_SIZE', '2'))
+        click.echo(f"🔍 Getting main cluster (top {main_cluster_size} clusters combined) from Neo4j graph...")
+        
+        # Call MCP tool to get main cluster
+        result = _call_mcp_get_main_cluster(detailed)
+        
+        if not result.get('success', False):
+            error_msg = result.get('error', 'Unknown error')
+            click.echo(f"❌ Error: {error_msg}", err=True)
+            if 'Neo4j' in error_msg:
+                click.echo("💡 Make sure Neo4j is running and you have run 'rkg create-clusters' first")
+            sys.exit(1)
+        
+        used_clusters = result.get('used_clusters', [])
+        table_count = result.get('table_count', 0)
+        tables = result.get('tables', [])
+        
+        click.echo(f"📋 Main cluster combines {len(used_clusters)} clusters with {table_count} unique tables:")
+        click.echo()
+        
+        # Show which clusters were combined
+        click.echo("🏷️  Combined clusters:")
+        for cluster in used_clusters:
+            click.echo(f"   • {cluster['name']} (ID: {cluster['id']}) - {cluster['table_count']} tables")
+        click.echo()
+        
+        # Show tables or DDL
+        if detailed and result.get('ddl'):
+            click.echo("📋 DDL for main cluster tables:")
+            click.echo()
+            click.echo(result['ddl'])
+        else:
+            click.echo(f"📋 Main cluster tables ({table_count}):")
+            for i, table in enumerate(tables, 1):
+                click.echo(f"{i:3d}. {table}")
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
+@click.option('--exclude-main', is_flag=True, default=True, help='Exclude clusters that make up the main cluster')
+@backend_options
+def list_clusters(connection: str, exclude_main: bool, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
     """List all clusters with basic information."""
     try:
         # Ensure Neo4j environment variables are set for MCP tools
@@ -705,7 +772,7 @@ def list_clusters(connection: str, neo4j_uri: str, neo4j_user: str, neo4j_passwo
         click.echo("🔍 Getting cluster list from Neo4j graph...")
         
         # Call MCP tool to get clusters
-        result = _call_mcp_list_clusters()
+        result = _call_mcp_list_clusters(exclude_main)
         
         if not result.get('success', False):
             error_msg = result.get('error', 'Unknown error')
@@ -743,8 +810,9 @@ def list_clusters(connection: str, neo4j_uri: str, neo4j_user: str, neo4j_passwo
 @click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
 @click.option('--cluster-id', '-i', required=True, help='Cluster ID to show details for')
 @click.option('--detailed', '-d', is_flag=True, help='Show detailed column information including data types')
+@click.option('--exclude-main', is_flag=True, default=True, help='Exclude tables that are in the main cluster')
 @backend_options
-def show_cluster(connection: str, cluster_id: str, detailed: bool, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
+def show_cluster(connection: str, cluster_id: str, detailed: bool, exclude_main: bool, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
     """Show detailed information about a specific cluster."""
     try:
         # Ensure Neo4j environment variables are set for MCP tools
@@ -761,7 +829,7 @@ def show_cluster(connection: str, cluster_id: str, detailed: bool, neo4j_uri: st
         click.echo(f"🔍 Getting DDL for cluster '{cluster_id}' from Neo4j graph...")
         
         # Call MCP tool to get cluster DDL
-        result = _call_mcp_show_cluster(cluster_id, detailed)
+        result = _call_mcp_show_cluster(cluster_id, detailed, exclude_main)
         
         if not result.get('result', {}).get('success', False):
             error_msg = result.get('result', {}).get('error', 'Unknown error')

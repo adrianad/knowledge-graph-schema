@@ -108,7 +108,7 @@ Respond in this exact JSON format:
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
-                max_tokens=5000
+                max_tokens=16000
             )
             
             result_text = response.choices[0].message.content.strip()
