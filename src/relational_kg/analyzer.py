@@ -19,24 +19,21 @@ class TableRelevanceScore:
 class SchemaAnalyzer:
     """Analyze database schema and provide intelligent table suggestions."""
     
-    def __init__(self, connection_string: str, backend: str = 'networkx', **backend_kwargs):
-        """Initialize analyzer with database connection and specified backend."""
+    def __init__(self, connection_string: str, backend: str = 'neo4j', **backend_kwargs):
+        """Initialize analyzer with database connection and Neo4j backend."""
         self.extractor = DatabaseExtractor(connection_string)
         self.logger = logging.getLogger(__name__)
         self._connected = False
         self.tables: Dict[str, TableInfo] = {}
         
-        # Initialize the appropriate backend
-        if backend == 'networkx':
-            from .backends.networkx_backend import NetworkXBackend
-            self.backend = NetworkXBackend()
-        elif backend == 'neo4j':
-            from .backends.neo4j_backend import Neo4jBackend
-            self.backend = Neo4jBackend(**backend_kwargs)
-        else:
-            raise ValueError(f"Unknown backend: {backend}")
+        # Initialize Neo4j backend
+        if backend != 'neo4j':
+            raise ValueError(f"Only 'neo4j' backend is supported, got: {backend}")
+            
+        from .backends.neo4j_backend import Neo4jBackend
+        self.backend = Neo4jBackend(**backend_kwargs)
         
-        self.logger.info(f"Initialized SchemaAnalyzer with {backend} backend")
+        self.logger.info("Initialized SchemaAnalyzer with Neo4j backend")
     
     def analyze_schema(self, include_views: bool = True) -> None:
         """Analyze database schema and build knowledge graph."""
