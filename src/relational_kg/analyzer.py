@@ -60,16 +60,13 @@ class SchemaAnalyzer:
         max_suggestions: int = 5
     ) -> List[str]:
         """Suggest additional tables that could be joined with base tables."""
-        if not self._connected:
-            raise RuntimeError("Schema not analyzed. Call analyze_schema() first.")
-        
+        # Neo4j backend can work directly without schema analysis
         suggestions = set()
         
         for table in base_tables:
-            if table in self.backend.get_all_tables():
-                # Get neighbors (direct relationships)
-                neighbors = self.backend.get_table_neighbors(table)
-                suggestions.update(neighbors)
+            # Get neighbors (direct relationships) from Neo4j
+            neighbors = self.backend.get_table_neighbors(table)
+            suggestions.update(neighbors)
         
         # Remove base tables from suggestions
         suggestions = suggestions - set(base_tables)
@@ -88,9 +85,7 @@ class SchemaAnalyzer:
     
     def find_connection_path(self, table1: str, table2: str, max_hops: Optional[int] = None) -> Optional[List[str]]:
         """Find connection path between two tables."""
-        if not self._connected:
-            raise RuntimeError("Schema not analyzed. Call analyze_schema() first.")
-        
+        # Neo4j backend can work directly without schema analysis
         return self.backend.find_shortest_path(table1, table2, max_hops)
     
     def get_schema_summary(self) -> Dict[str, Any]:

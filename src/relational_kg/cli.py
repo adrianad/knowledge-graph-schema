@@ -188,7 +188,7 @@ def suggest_joins(connection: str, tables: str, max_suggestions: int, neo4j_uri:
             sys.exit(1)
             
         analyzer = _create_analyzer(connection_final, neo4j_uri, neo4j_user, neo4j_password)
-        analyzer.analyze_schema(include_views=include_views)
+        # Skip schema rebuild - use existing Neo4j graph
         
         base_tables = [t.strip() for t in tables.split(',')]
         click.echo(f"🔗 Finding join suggestions for: {', '.join(base_tables)}")
