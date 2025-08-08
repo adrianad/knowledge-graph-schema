@@ -242,58 +242,87 @@ The application provides a comprehensive Model Context Protocol (MCP) server wit
 
 ### LLM System Prompt - Database Tools
 
+#### Simplified Version
+```
+You have 8 MCP tools for database exploration:
+
+**Schema Tools:**
+- `explore_table("table1,table2")` - Get table schemas  
+- `explore_view("view1,view2")` - Get view schemas
+- `get_main_cluster()` - Get most important tables
+
+**Domain Tools:**
+- `list_clusters()` - List business domain clusters
+- `show_cluster("cluster_id")` - Get tables from specific domain
+
+**Relationship Tools:**
+- `find_path("table1,table2,table3")` - Find JOIN paths between tables (primary tool for SQL construction)
+- `suggest_joins("base_table")` - Discover additional relevant tables  
+- `find_related_views("table1,table2")` - Find statistical views
+
+**Workflow:** Start with `get_main_cluster()` → Use `find_path()` for JOINs → Use `explore_table()` for schemas
+```
+
+#### Detailed Version
 ```
 You have access to 8 database exploration tools through MCP. Use these tools to understand database schemas and construct efficient SQL queries:
 
 ## Schema Discovery Tools
 
-**explore_table(table_names, detailed=True)**
-- Get DDL and column details for specific tables
-- Input: "user_,booking,sample" (comma-separated table names)
+**explore_table(table_names)**
+- Get detailed information about specific tables from Neo4j graph
+- Input: "user_,booking,sample" (comma-separated table names to explore)
+- Returns: DDL and column details for specified tables
 - Use when: You need schema details for known tables
 
-**explore_view(view_names, detailed=True)**
-- Get DDL and column details for specific database views (statistics/reporting)
-- Input: "sales_summary,monthly_stats" (comma-separated view names)
+**explore_view(view_names)**
+- Get detailed information about specific database views for statistics and reporting
+- Input: "sales_summary,monthly_stats" (comma-separated view names to explore)
 - Returns: View schemas with clear (VIEW) labels
 - Use when: You need schema details for statistical/reporting views
 
 **get_main_cluster(detailed=False)**  
-- Get the most important core tables across all business domains
+- Get the main cluster (union of top N most important clusters) without duplicates
+- detailed: Whether to include detailed DDL information (default: False)
 - Returns: Clean list of essential tables (no metadata noise)
 - Use when: Starting exploration or need core tables for general queries
 
 ## Business Domain Tools
 
 **list_clusters(exclude_main=True)**
-- List all available table clusters (business domains)
-- Returns: Cluster names, descriptions, keywords, table counts
+- List all available table clusters from Neo4j
+- exclude_main: Whether to exclude the clusters that make up the main cluster (default: True)
+- Returns: Cluster names, descriptions, keywords, table counts (filtered to exclude main cluster tables)
 - Use when: You want to explore business domains or find related table groups
 
 **show_cluster(cluster_id, detailed=False, exclude_main=True)**
-- Get table names from a specific business domain cluster
-- detailed=False: Returns just table names + cluster metadata (RECOMMENDED)
-- detailed=True: Returns full DDL for all tables (heavy)
-- Input: cluster ID like "cluster_3" or "billing_cluster"
+- Show detailed information about a specific cluster
+- cluster_id: The cluster ID to show details for
+- detailed: Whether to include detailed column information for tables (default: False)
+- exclude_main: Whether to exclude tables that are in the main cluster (default: True)
 - Use when: You want to discover tables in a business context, then use explore_table() for specific schemas
 
 ## Relationship Discovery Tools
 
 **find_path(tables, max_hops=3)**
-- Find ALL connection paths between specified tables (MOST IMPORTANT for JOIN construction)
-- Input: "user_,sample,booking,instrument" (comma-separated tables you want to connect)
-- Returns: Clean connection map with exact JOIN paths (no statistical noise)
+- Find all connection paths between the given tables (MOST IMPORTANT for JOIN construction)
+- tables: Comma-separated list of tables to find connections between
+- max_hops: Maximum relationship hops to explore (default: 3)
+- Returns: Clean connection map with exact JOIN paths (automatically filters redundant subpaths)
 - Use when: You need to construct JOINs between specific tables
 
 **suggest_joins(base_tables, max_suggestions=5, max_hops=1, per_table=False)**
-- Discover additional relevant tables to join with your base tables
-- Input: "user_,booking" (comma-separated starting tables)
+- Suggest additional tables that could be joined with the given base tables
+- base_tables: Comma-separated list of base tables to suggest joins for
+- max_suggestions: Maximum number of suggestions to return (default: 5)
+- max_hops: Maximum relationship hops to explore - 1=direct, 2=two-hop, etc. (default: 1)
+- per_table: If True, return suggestions organized per base table; if False, return combined results (default: False)
 - Returns: Suggested tables ranked by importance with connection paths
 - Use when: You want to explore what other tables might be relevant
 
-**find_related_views(table_names, max_suggestions=5)**
-- Find database views related to specific tables for statistics and reporting
-- Input: "orders,customers" (comma-separated table names)
+**find_related_views(table_names)**
+- Find database views related to specific tables for statistics and reporting queries
+- table_names: Comma-separated list of table names to find related views for
 - Returns: Related statistical views ranked by importance
 - Use when: You need statistics/reports based on operational tables
 
