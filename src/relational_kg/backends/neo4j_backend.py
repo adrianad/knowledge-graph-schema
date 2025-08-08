@@ -408,7 +408,7 @@ class Neo4jBackend(GraphBackend):
         return filtered
     
     def _is_subsequence(self, short_path: List[str], long_path: List[str]) -> bool:
-        """Check if short_path appears as a contiguous subsequence in long_path."""
+        """Check if short_path appears as a contiguous subsequence in long_path (in either direction)."""
         if len(short_path) >= len(long_path):
             return False
             
@@ -416,6 +416,13 @@ class Neo4jBackend(GraphBackend):
         for i in range(len(long_path) - len(short_path) + 1):
             if long_path[i:i+len(short_path)] == short_path:
                 return True
+        
+        # Also check the reverse of short_path (since relationships are bidirectional)
+        reversed_short_path = list(reversed(short_path))
+        for i in range(len(long_path) - len(short_path) + 1):
+            if long_path[i:i+len(short_path)] == reversed_short_path:
+                return True
+                
         return False
     
     def get_table_neighbors(self, table_name: str, max_hops: int = 1) -> Set[str]:
