@@ -55,12 +55,11 @@ def _get_analyzer() -> SchemaAnalyzer:
 
 
 @mcp.tool()
-def explore_table(table_names: str, detailed: bool = True) -> Dict[str, Any]:
+def explore_table(table_names: str) -> Dict[str, Any]:
     """Get detailed information about specific tables from Neo4j graph.
     
     Args:
         table_names: Comma-separated list of table names to explore
-        detailed: Whether to include detailed column information
         
     Returns:
         Dictionary containing table information including columns and foreign keys
@@ -547,12 +546,11 @@ def suggest_joins(base_tables: str, max_suggestions: int = 5, max_hops: int = 1,
 
 
 @mcp.tool()
-def explore_view(view_names: str, detailed: bool = True) -> Dict[str, Any]:
+def explore_view(view_names: str) -> Dict[str, Any]:
     """Get detailed information about specific database views for statistics and reporting.
     
     Args:
         view_names: Comma-separated list of view names to explore
-        detailed: Whether to include detailed column information
         
     Returns:
         Dictionary containing view information including columns and dependencies
@@ -613,12 +611,11 @@ def explore_view(view_names: str, detailed: bool = True) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def find_related_views(table_names: str, max_suggestions: int = 5) -> Dict[str, Any]:
+def find_related_views(table_names: str) -> Dict[str, Any]:
     """Find database views related to specific tables for statistics and reporting queries.
     
     Args:
         table_names: Comma-separated list of table names to find related views for
-        max_suggestions: Maximum number of view suggestions to return
         
     Returns:
         Dictionary containing related views with their relationships to the tables
@@ -670,12 +667,12 @@ def find_related_views(table_names: str, max_suggestions: int = 5) -> Dict[str, 
         # Get importance scores for ranking
         importance_scores = analyzer.backend.get_table_importance()
         
-        # Sort by importance and limit results
+        # Sort by importance (return all views)
         sorted_views = sorted(
             related_views,
             key=lambda x: importance_scores.get(x, 0),
             reverse=True
-        )[:max_suggestions]
+        )
         
         if not sorted_views:
             return {
