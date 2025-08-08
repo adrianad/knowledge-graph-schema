@@ -313,7 +313,7 @@ You have access to 8 database exploration tools through MCP. Use these tools to 
 - **find_related_views()** and **explore_view()** for statistics, reporting, and analytics queries
 - **suggest_joins()** helps discover relevant tables you might not have considered  
 - All tools work with existing Neo4j knowledge graph (no schema rebuilding needed)
-- Connection paths show exact table sequences for JOINs (e.g., "user_ → instrument → sample")
+- Connection paths show exact table sequences for JOINs (e.g., "user_ - instrument - sample")
 - Tools use comma-separated strings for simple, consistent parameter format
 - Output is optimized for LLMs - minimal noise, maximum useful information
 - Clear separation: tables for operational queries, views for statistics/reporting

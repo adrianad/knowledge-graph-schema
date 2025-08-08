@@ -250,7 +250,7 @@ def suggest_joins(connection: str, tables: str, max_suggestions: int, max_hops: 
                         if path and len(path) > 1:
                             distance = len(path) - 1
                             distance_desc = f"{distance}-hop" if distance > 1 else "direct"
-                            path_str = " → ".join(path)
+                            path_str = " - ".join(path)
                             click.echo(f"  {i}. {table} ({distance_desc}: {path_str})")
                         else:
                             click.echo(f"  {i}. {table}")
@@ -273,7 +273,7 @@ def suggest_joins(connection: str, tables: str, max_suggestions: int, max_hops: 
                 for base_table in base_tables:
                     path = analyzer.find_connection_path(base_table, table, max_hops)
                     if path and len(path) > 1:
-                        path_str = " → ".join(path)
+                        path_str = " - ".join(path)
                         # Avoid duplicate paths
                         if path_str not in paths_shown:
                             distance = len(path) - 1
@@ -339,7 +339,7 @@ def find_path(connection: str, tables: str, max_hops: int, neo4j_uri: str, neo4j
             
             click.echo(f"\\n🔗 {distance_desc} ({len(conns)}):")
             for conn in conns:
-                path_str = " → ".join(conn['path'])
+                path_str = " - ".join(conn['path'])
                 click.echo(f"  • {conn['table1']} ↔ {conn['table2']}: {path_str}")
         
         # Show summary statistics

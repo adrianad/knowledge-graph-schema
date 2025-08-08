@@ -387,7 +387,7 @@ def find_path(tables: str, max_hops: int = 3) -> Dict[str, Any]:
         # Format connections with readable paths (simplified)
         formatted_connections = []
         for conn in connections:
-            path_str = " → ".join(conn['path'])
+            path_str = " - ".join(conn['path'])
             formatted_connections.append({
                 "table1": conn['table1'],
                 "table2": conn['table2'],
@@ -458,11 +458,11 @@ def suggest_joins(base_tables: str, max_suggestions: int = 5, max_hops: int = 1,
                     if path:
                         distance = len(path) - 1
                         distance_desc = "direct" if distance == 1 else f"{distance}-hop"
-                        path_str = " → ".join(path)
+                        path_str = " - ".join(path)
                     else:
                         distance = None
                         distance_desc = "unknown"
-                        path_str = f"{base_table} ↔ {suggested_table}"
+                        path_str = f"{base_table} - {suggested_table}"
                     
                     formatted_suggestions[base_table].append({
                         "table": suggested_table,
@@ -512,7 +512,7 @@ def suggest_joins(base_tables: str, max_suggestions: int = 5, max_hops: int = 1,
                     if path and len(path) > 1:
                         distance = len(path) - 1
                         distance_desc = "direct" if distance == 1 else f"{distance}-hop"
-                        path_str = " → ".join(path)
+                        path_str = " - ".join(path)
                         suggestion_entry["paths"].append({
                             "from_table": base_table,
                             "path": path,

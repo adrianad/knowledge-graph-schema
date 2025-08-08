@@ -380,7 +380,7 @@ class Neo4jBackend(GraphBackend):
             return filtered_connections
     
     def _filter_subpaths(self, connections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Filter out connections whose paths are subpaths of longer connections."""
+        """Remove any path that appears as a contiguous subsequence within a longer path."""
         if not connections:
             return connections
         
@@ -391,17 +391,17 @@ class Neo4jBackend(GraphBackend):
         for connection in sorted_connections:
             current_path = connection['path']
             
-            # Check if this path is a subpath of any already-kept path
+            # Check if this path is a contiguous subsequence of any already-kept longer path
             is_subpath = False
             for kept_connection in filtered:
                 kept_path = kept_connection['path']
                 
-                # Check if current_path is a contiguous subsequence of kept_path
+                # Check if current_path appears as a contiguous subsequence in kept_path
                 if self._is_subsequence(current_path, kept_path):
                     is_subpath = True
                     break
             
-            # Only keep if it's not a subpath
+            # Only keep if it's not a subpath of any longer path
             if not is_subpath:
                 filtered.append(connection)
         
