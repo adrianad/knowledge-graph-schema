@@ -236,19 +236,86 @@ pytest
 black src/
 ```
 
+## MCP Tools for LLM Integration
+
+The application provides a comprehensive Model Context Protocol (MCP) server with 6 specialized tools for autonomous database exploration and query construction. Use the following description in your LLM system prompt:
+
+### LLM System Prompt - Database Tools
+
+```
+You have access to 6 database exploration tools through MCP. Use these tools to understand database schemas and construct efficient SQL queries:
+
+## Schema Discovery Tools
+
+**explore_table(table_names, detailed=True)**
+- Get DDL and column details for specific tables
+- Input: "user_,booking,sample" (comma-separated table names)
+- Use when: You need schema details for known tables
+
+**get_main_cluster(detailed=False)**  
+- Get the most important core tables across all business domains
+- Returns: Deduplicated list of essential tables
+- Use when: Starting exploration or need core tables for general queries
+
+## Business Domain Tools
+
+**list_clusters(exclude_main=True)**
+- List all available table clusters (business domains)
+- Returns: Cluster names, descriptions, keywords, table counts
+- Use when: You want to explore business domains or find related table groups
+
+**show_cluster(cluster_id, detailed=False, exclude_main=True)**
+- Get DDL for all tables in a specific business domain
+- Input: cluster ID like "customer_cluster" or "1"
+- Use when: You want to work within a specific business context
+
+## Relationship Discovery Tools
+
+**find_path(tables, max_hops=3)**
+- Find ALL connection paths between specified tables (MOST IMPORTANT for JOIN construction)
+- Input: "user_,sample,booking,instrument" (tables you want to connect)
+- Returns: Complete connection map with exact JOIN paths organized by hop distance
+- Use when: You need to construct JOINs between specific tables
+
+**suggest_joins(base_tables, max_suggestions=5, max_hops=1, per_table=False)**
+- Discover additional relevant tables to join with your base tables
+- Input: "user_,booking" (your starting tables)
+- Returns: Suggested tables ranked by importance with connection paths
+- Use when: You want to explore what other tables might be relevant
+
+## Recommended Workflow
+
+1. **Start broad**: Use `get_main_cluster()` or `list_clusters()` to understand the database
+2. **Focus domain**: Use `show_cluster()` for specific business areas  
+3. **Plan JOINs**: Use `find_path()` to get exact connection paths between target tables
+4. **Expand query**: Use `suggest_joins()` to discover additional relevant tables
+5. **Get details**: Use `explore_table()` for specific schema information
+
+## Key Principles
+
+- **find_path()** is your primary tool for JOIN construction - it shows exact paths
+- **suggest_joins()** helps discover relevant tables you might not have considered
+- All tools work with the existing Neo4j knowledge graph (no schema rebuilding needed)
+- Connection paths show exact table sequences for JOINs (e.g., "user_ → instrument → sample")
+- Tools are optimized for multi-hop relationship discovery (up to 3+ hops)
+```
+
+### Integration Example
+
+```bash
+# Start MCP server
+python -m src.relational_kg.mcp_server
+
+# Use in LLM applications via MCP protocol
+# Tools provide structured JSON responses perfect for LLM processing
+```
+
 ## Recent Enhancements
 
 ✅ **Neo4j Integration**: Full backend support for large-scale schemas  
 ✅ **LLM Integration**: Automatic cluster analysis and keyword extraction  
 ✅ **Advanced Clustering**: Importance-based clustering with overlapping support  
-✅ **Semantic Search**: Natural language table discovery  
+✅ **MCP Tools**: Complete toolkit for autonomous LLM database exploration  
+✅ **Path Discovery**: Multi-hop relationship mapping for complex JOIN construction  
 ✅ **Enhanced CLI**: Comprehensive command set with flexible options  
 
-## Future Roadmap
-
-- Advanced relationship strength scoring based on data analysis
-- Schema evolution tracking and change detection  
-- Web API interface for programmatic access
-- Machine learning models for query-to-table mapping
-- Support for additional database types (Oracle, SQL Server)
-- Real-time schema monitoring and alerts
