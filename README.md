@@ -238,12 +238,12 @@ black src/
 
 ## MCP Tools for LLM Integration
 
-The application provides a comprehensive Model Context Protocol (MCP) server with 6 specialized tools for autonomous database exploration and query construction. Use the following description in your LLM system prompt:
+The application provides a comprehensive Model Context Protocol (MCP) server with 8 specialized tools for autonomous database exploration and query construction. Use the following description in your LLM system prompt:
 
 ### LLM System Prompt - Database Tools
 
 ```
-You have access to 6 database exploration tools through MCP. Use these tools to understand database schemas and construct efficient SQL queries:
+You have access to 8 database exploration tools through MCP. Use these tools to understand database schemas and construct efficient SQL queries:
 
 ## Schema Discovery Tools
 
@@ -252,9 +252,15 @@ You have access to 6 database exploration tools through MCP. Use these tools to 
 - Input: "user_,booking,sample" (comma-separated table names)
 - Use when: You need schema details for known tables
 
+**explore_view(view_names, detailed=True)**
+- Get DDL and column details for specific database views (statistics/reporting)
+- Input: "sales_summary,monthly_stats" (comma-separated view names)
+- Returns: View schemas with clear (VIEW) labels
+- Use when: You need schema details for statistical/reporting views
+
 **get_main_cluster(detailed=False)**  
 - Get the most important core tables across all business domains
-- Returns: Deduplicated list of essential tables
+- Returns: Clean list of essential tables (no metadata noise)
 - Use when: Starting exploration or need core tables for general queries
 
 ## Business Domain Tools
@@ -265,39 +271,52 @@ You have access to 6 database exploration tools through MCP. Use these tools to 
 - Use when: You want to explore business domains or find related table groups
 
 **show_cluster(cluster_id, detailed=False, exclude_main=True)**
-- Get DDL for all tables in a specific business domain
-- Input: cluster ID like "customer_cluster" or "1"
-- Use when: You want to work within a specific business context
+- Get table names from a specific business domain cluster
+- detailed=False: Returns just table names + cluster metadata (RECOMMENDED)
+- detailed=True: Returns full DDL for all tables (heavy)
+- Input: cluster ID like "cluster_3" or "billing_cluster"
+- Use when: You want to discover tables in a business context, then use explore_table() for specific schemas
 
 ## Relationship Discovery Tools
 
 **find_path(tables, max_hops=3)**
 - Find ALL connection paths between specified tables (MOST IMPORTANT for JOIN construction)
-- Input: "user_,sample,booking,instrument" (tables you want to connect)
-- Returns: Complete connection map with exact JOIN paths organized by hop distance
+- Input: "user_,sample,booking,instrument" (comma-separated tables you want to connect)
+- Returns: Clean connection map with exact JOIN paths (no statistical noise)
 - Use when: You need to construct JOINs between specific tables
 
 **suggest_joins(base_tables, max_suggestions=5, max_hops=1, per_table=False)**
 - Discover additional relevant tables to join with your base tables
-- Input: "user_,booking" (your starting tables)
+- Input: "user_,booking" (comma-separated starting tables)
 - Returns: Suggested tables ranked by importance with connection paths
 - Use when: You want to explore what other tables might be relevant
+
+**find_related_views(table_names, max_suggestions=5)**
+- Find database views related to specific tables for statistics and reporting
+- Input: "orders,customers" (comma-separated table names)
+- Returns: Related statistical views ranked by importance
+- Use when: You need statistics/reports based on operational tables
 
 ## Recommended Workflow
 
 1. **Start broad**: Use `get_main_cluster()` or `list_clusters()` to understand the database
-2. **Focus domain**: Use `show_cluster()` for specific business areas  
-3. **Plan JOINs**: Use `find_path()` to get exact connection paths between target tables
-4. **Expand query**: Use `suggest_joins()` to discover additional relevant tables
-5. **Get details**: Use `explore_table()` for specific schema information
+2. **Focus domain**: Use `show_cluster(cluster_id, detailed=False)` to get table names from specific business areas  
+3. **Plan JOINs**: Use `find_path("table1,table2,table3")` to get exact connection paths between target tables
+4. **Expand query**: Use `suggest_joins("base_tables")` to discover additional relevant tables
+5. **Get details**: Use `explore_table("specific_tables")` for operational schema information
+6. **Find statistics**: Use `find_related_views("base_tables")` and `explore_view("view_names")` for reporting/analytics
 
 ## Key Principles
 
-- **find_path()** is your primary tool for JOIN construction - it shows exact paths
-- **suggest_joins()** helps discover relevant tables you might not have considered
-- All tools work with the existing Neo4j knowledge graph (no schema rebuilding needed)
+- **find_path()** is your primary tool for JOIN construction - shows exact paths with clean output
+- **show_cluster() with detailed=False** for discovery, then **explore_table()** for specific schemas
+- **find_related_views()** and **explore_view()** for statistics, reporting, and analytics queries
+- **suggest_joins()** helps discover relevant tables you might not have considered  
+- All tools work with existing Neo4j knowledge graph (no schema rebuilding needed)
 - Connection paths show exact table sequences for JOINs (e.g., "user_ → instrument → sample")
-- Tools are optimized for multi-hop relationship discovery (up to 3+ hops)
+- Tools use comma-separated strings for simple, consistent parameter format
+- Output is optimized for LLMs - minimal noise, maximum useful information
+- Clear separation: tables for operational queries, views for statistics/reporting
 ```
 
 ### Integration Example
@@ -317,5 +336,9 @@ python -m src.relational_kg.mcp_server
 ✅ **Advanced Clustering**: Importance-based clustering with overlapping support  
 ✅ **MCP Tools**: Complete toolkit for autonomous LLM database exploration  
 ✅ **Path Discovery**: Multi-hop relationship mapping for complex JOIN construction  
-✅ **Enhanced CLI**: Comprehensive command set with flexible options  
+✅ **Enhanced CLI**: Comprehensive command set with organized categories  
+✅ **Optimized MCP Output**: Clean, noise-free responses perfect for LLM consumption  
+✅ **Consistent Parameter Format**: Comma-separated strings across all tools  
+✅ **Efficient Two-Step Discovery**: Table names first, then selective schema details  
+✅ **View Support**: Complete toolkit for statistics and reporting queries with database views  
 
