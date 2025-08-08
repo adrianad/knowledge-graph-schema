@@ -502,10 +502,10 @@ def explore_table(connection: str, table: tuple, detailed: bool, backend: str, n
 
 @main.command()
 @click.option('--connection', '-c', help='Database connection string (overrides DATABASE_URL env var)')
-@click.option('--method', '-m', default='community', type=click.Choice(['community', 'importance']), help='Clustering method: community detection or importance-based')
+@click.option('--method', '-m', default='importance', type=click.Choice(['community', 'importance']), help='Clustering method: community detection or importance-based')
 @click.option('--min-size', default=4, help='Minimum cluster size (importance method only)')
-@click.option('--max-hops', default=2, help='Maximum relationship hops (importance method only)')
-@click.option('--top-pct', default=0.2, help='Percentage of top tables to use as cores (importance method only)')
+@click.option('--max-hops', default=1, help='Maximum relationship hops (importance method only)')
+@click.option('--top-pct', default=0.05, help='Percentage of top tables to use as cores (importance method only)')
 @click.option('--no-llm', is_flag=True, help='Skip LLM analysis and use simple cluster naming')
 @backend_options
 def create_clusters(connection: str, method: str, min_size: int, max_hops: int, top_pct: float, no_llm: bool, backend: str, neo4j_uri: str, neo4j_user: str, neo4j_password: str, include_views: bool) -> None:
