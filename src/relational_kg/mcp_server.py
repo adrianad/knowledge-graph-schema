@@ -341,6 +341,238 @@ def get_main_cluster(detailed: bool = False) -> Dict[str, Any]:
         }
 
 
+@mcp.tool()
+def find_path(tables: str, max_hops: int = 3) -> Dict[str, Any]:
+    """Find all connection paths between the given tables.
+    
+    Args:
+        tables: Comma-separated list of tables to find connections between
+        max_hops: Maximum relationship hops to explore (default: 3)
+        
+    Returns:
+        Dictionary containing all connection paths organized by hop distance
+    """
+    try:
+        analyzer = _get_analyzer()
+        
+        # Parse table names
+        table_list = []
+        for name in tables.split(','):
+            name = name.strip()
+            if name:
+                table_list.append(name)
+        
+        if len(table_list) < 2:
+            return {
+                "success": False,
+                "error": "At least 2 tables are required to find connections",
+                "help": "Provide comma-separated table names like 'user_,sample,booking'"
+            }
+        
+        logger.info(f"Finding connections between tables: {table_list} (max_hops: {max_hops})")
+        
+        # Find all connections
+        connections = analyzer.backend.find_all_connections(table_list, max_hops)
+        
+        if not connections:
+            return {
+                "success": True,
+                "connections": [],
+                "summary": {
+                    "total_pairs": len(table_list) * (len(table_list) - 1) // 2,
+                    "connected_pairs": 0,
+                    "missing_connections": len(table_list) * (len(table_list) - 1) // 2
+                },
+                "message": f"No connections found between these tables within {max_hops} hops"
+            }
+        
+        # Group connections by distance for better organization
+        connections_by_distance = {}
+        for conn in connections:
+            distance = conn['distance']
+            if distance not in connections_by_distance:
+                connections_by_distance[distance] = []
+            connections_by_distance[distance].append(conn)
+        
+        # Format connections with readable paths
+        formatted_connections = []
+        for distance in sorted(connections_by_distance.keys()):
+            distance_desc = "Direct" if distance == 1 else f"{distance}-hop"
+            for conn in connections_by_distance[distance]:
+                path_str = " → ".join(conn['path'])
+                formatted_connections.append({
+                    "table1": conn['table1'],
+                    "table2": conn['table2'],
+                    "path": conn['path'],
+                    "path_string": path_str,
+                    "distance": distance,
+                    "distance_description": distance_desc
+                })
+        
+        total_pairs = len(table_list) * (len(table_list) - 1) // 2
+        missing_connections = total_pairs - len(connections)
+        
+        result = {
+            "success": True,
+            "tables": table_list,
+            "max_hops": max_hops,
+            "connections": formatted_connections,
+            "connections_by_distance": connections_by_distance,
+            "summary": {
+                "total_pairs": total_pairs,
+                "connected_pairs": len(connections),
+                "missing_connections": missing_connections
+            }
+        }
+        
+        if missing_connections > 0:
+            result["warning"] = f"{missing_connections} table pair(s) have no connection within {max_hops} hops"
+        
+        analyzer.close()
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in find_path: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "help": "Make sure Neo4j is running and the knowledge graph has been built"
+        }
+
+
+@mcp.tool()
+def suggest_joins(base_tables: str, max_suggestions: int = 5, max_hops: int = 1, per_table: bool = False) -> Dict[str, Any]:
+    """Suggest additional tables that could be joined with the given base tables.
+    
+    Args:
+        base_tables: Comma-separated list of base tables to suggest joins for
+        max_suggestions: Maximum number of suggestions to return
+        max_hops: Maximum relationship hops to explore (1=direct, 2=two-hop, etc.)
+        per_table: If True, return suggestions organized per base table; if False, return combined results
+        
+    Returns:
+        Dictionary containing join suggestions with connection paths
+    """
+    try:
+        analyzer = _get_analyzer()
+        
+        # Parse base table names
+        table_list = []
+        for name in base_tables.split(','):
+            name = name.strip()
+            if name:
+                table_list.append(name)
+        
+        if not table_list:
+            return {
+                "success": False,
+                "error": "No base tables provided",
+                "help": "Provide comma-separated table names like 'user_,booking'"
+            }
+        
+        logger.info(f"Getting join suggestions for tables: {table_list} (max_hops: {max_hops}, per_table: {per_table})")
+        
+        if per_table:
+            # Per-table suggestions
+            suggestions_per_table = analyzer.suggest_tables_for_join(table_list, max_suggestions, max_hops)
+            
+            # Format with connection paths
+            formatted_suggestions = {}
+            for base_table, suggestions in suggestions_per_table.items():
+                formatted_suggestions[base_table] = []
+                for suggested_table in suggestions:
+                    # Find connection path
+                    path = analyzer.find_connection_path(base_table, suggested_table, max_hops)
+                    if path:
+                        distance = len(path) - 1
+                        distance_desc = "direct" if distance == 1 else f"{distance}-hop"
+                        path_str = " → ".join(path)
+                    else:
+                        distance = None
+                        distance_desc = "unknown"
+                        path_str = f"{base_table} ↔ {suggested_table}"
+                    
+                    formatted_suggestions[base_table].append({
+                        "table": suggested_table,
+                        "path": path,
+                        "path_string": path_str,
+                        "distance": distance,
+                        "distance_description": distance_desc
+                    })
+            
+            result = {
+                "success": True,
+                "mode": "per_table",
+                "base_tables": table_list,
+                "max_suggestions": max_suggestions,
+                "max_hops": max_hops,
+                "suggestions_per_table": formatted_suggestions,
+                "total_unique_suggestions": len(set(
+                    suggestion["table"] 
+                    for suggestions in formatted_suggestions.values() 
+                    for suggestion in suggestions
+                ))
+            }
+        else:
+            # Combined suggestions
+            suggestions = analyzer.suggest_tables_for_join_combined(table_list, max_suggestions, max_hops)
+            
+            if not suggestions:
+                return {
+                    "success": True,
+                    "mode": "combined",
+                    "base_tables": table_list,
+                    "suggestions": [],
+                    "message": f"No join suggestions found within {max_hops} hops"
+                }
+            
+            # Format with connection paths from each base table
+            formatted_suggestions = []
+            for suggested_table in suggestions:
+                suggestion_entry = {
+                    "table": suggested_table,
+                    "paths": []
+                }
+                
+                # Find paths from each base table
+                for base_table in table_list:
+                    path = analyzer.find_connection_path(base_table, suggested_table, max_hops)
+                    if path and len(path) > 1:
+                        distance = len(path) - 1
+                        distance_desc = "direct" if distance == 1 else f"{distance}-hop"
+                        path_str = " → ".join(path)
+                        suggestion_entry["paths"].append({
+                            "from_table": base_table,
+                            "path": path,
+                            "path_string": path_str,
+                            "distance": distance,
+                            "distance_description": distance_desc
+                        })
+                
+                formatted_suggestions.append(suggestion_entry)
+            
+            result = {
+                "success": True,
+                "mode": "combined",
+                "base_tables": table_list,
+                "max_suggestions": max_suggestions,
+                "max_hops": max_hops,
+                "suggestions": formatted_suggestions,
+                "total_suggestions": len(formatted_suggestions)
+            }
+        
+        analyzer.close()
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in suggest_joins: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "help": "Make sure Neo4j is running and the knowledge graph has been built"
+        }
+
+
 if __name__ == "__main__":
     # Run the MCP server
     mcp.run()
