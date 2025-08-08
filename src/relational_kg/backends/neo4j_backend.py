@@ -374,8 +374,49 @@ class Neo4jBackend(GraphBackend):
                     'path': record['path_nodes'],
                     'distance': record['distance']
                 })
-                
+            
+            # Filter out subpaths to avoid redundant connections
+            filtered_connections = self._filter_subpaths(connections)
+            return filtered_connections
+    
+    def _filter_subpaths(self, connections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Filter out connections whose paths are subpaths of longer connections."""
+        if not connections:
             return connections
+        
+        # Sort by path length (longest first) to prioritize longer paths
+        sorted_connections = sorted(connections, key=lambda x: len(x['path']), reverse=True)
+        
+        filtered = []
+        for connection in sorted_connections:
+            current_path = connection['path']
+            
+            # Check if this path is a subpath of any already-kept path
+            is_subpath = False
+            for kept_connection in filtered:
+                kept_path = kept_connection['path']
+                
+                # Check if current_path is a contiguous subsequence of kept_path
+                if self._is_subsequence(current_path, kept_path):
+                    is_subpath = True
+                    break
+            
+            # Only keep if it's not a subpath
+            if not is_subpath:
+                filtered.append(connection)
+        
+        return filtered
+    
+    def _is_subsequence(self, short_path: List[str], long_path: List[str]) -> bool:
+        """Check if short_path appears as a contiguous subsequence in long_path."""
+        if len(short_path) >= len(long_path):
+            return False
+            
+        # Look for short_path as a contiguous substring in long_path
+        for i in range(len(long_path) - len(short_path) + 1):
+            if long_path[i:i+len(short_path)] == short_path:
+                return True
+        return False
     
     def get_table_neighbors(self, table_name: str, max_hops: int = 1) -> Set[str]:
         """Get neighbors of a table/view within max_hops distance."""
