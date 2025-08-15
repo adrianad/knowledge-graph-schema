@@ -51,14 +51,14 @@ def _get_analyzer() -> SchemaAnalyzer:
 @mcp.tool(description="Get detailed information about specific tables from Neo4j graph")
 def explore_table(
     table_names: str = Field(description="Comma-separated list of table names to explore")
-) -> Dict[str, Any]:
+) -> str:
     """Get detailed information about specific tables from Neo4j graph.
     
     Args:
         table_names: Comma-separated list of table names to explore
         
     Returns:
-        Dictionary containing table information including columns and foreign keys
+        Plain text DDL for the requested tables
     """
     try:
         analyzer = _get_analyzer()
@@ -71,7 +71,7 @@ def explore_table(
                 table_list.append(name)
         
         if not table_list:
-            return {"error": "No table names provided"}
+            return "Error: No table names provided"
         
         logger.info(f"Getting DDL for tables: {table_list}")
         
@@ -89,27 +89,20 @@ def explore_table(
             ddl_statements.append(table['ddl'])
             ddl_statements.append("")  # Empty line between tables
         
-        result = {
-            "success": True,
-            "tables_requested": len(table_list),
-            "tables_found": len(found_tables),
-            "ddl": "\n".join(ddl_statements).strip()
-        }
+        result_text = "\n".join(ddl_statements).strip()
         
         if missing_tables:
-            result["missing_tables"] = missing_tables
-            result["warning"] = f"Tables not found in Neo4j: {', '.join(missing_tables)}"
+            if result_text:
+                result_text += f"\n\nWarning: Tables not found in Neo4j: {', '.join(missing_tables)}"
+            else:
+                result_text = f"Error: Tables not found in Neo4j: {', '.join(missing_tables)}\nMake sure Neo4j is running and the knowledge graph has been built with 'rkg analyze'"
         
         analyzer.close()
-        return {"result": result}
+        return result_text
         
     except Exception as e:
         logger.error(f"Error in explore_table: {e}")
-        return {"result": {
-            "success": False,
-            "error": str(e),
-            "help": "Make sure Neo4j is running and the knowledge graph has been built with 'rkg analyze'"
-        }}
+        return f"Error: {str(e)}\nMake sure Neo4j is running and the knowledge graph has been built with 'rkg analyze'"
 
 
 @mcp.tool(description="List all available table clusters from Neo4j")
