@@ -109,7 +109,7 @@ def explore_table(
 @mcp.tool(description="List all available table clusters from Neo4j")
 def list_clusters(
     exclude_main: bool = Field(default=True, description="Whether to exclude the clusters that make up the main cluster")
-) -> Dict[str, Any]:
+) -> str:
     """List all available table clusters from Neo4j.
     
     Args:
@@ -151,10 +151,12 @@ def list_clusters(
                 clusters = remaining_clusters
         
         if not clusters:
-            return {"info": "No clusters found. Run 'rkg create-clusters' to generate clusters first."}
+            return "No clusters found. Run 'rkg create-clusters' to generate clusters first."
         
+        # Format clusters as simple text - just cluster IDs
+        cluster_ids = [cluster.get('id', 'unknown') for cluster in clusters]
         analyzer.close()
-        return clusters
+        return ", ".join(cluster_ids)
         
     except Exception as e:
         logger.error(f"Error in list_clusters: {e}")
@@ -166,7 +168,7 @@ def show_cluster(
     cluster_id: str = Field(description="The cluster ID to show details for"),
     detailed: bool = Field(default=False, description="Whether to include detailed column information for tables"),
     exclude_main: bool = Field(default=True, description="Whether to exclude tables that are in the main cluster")
-) -> Dict[str, Any]:
+) -> str:
     """Show detailed information about a specific cluster.
     
     Args:
@@ -245,7 +247,7 @@ def show_cluster(
 @mcp.tool(description="Get the main cluster (union of top N most important clusters) without duplicates")
 def get_main_cluster(
     detailed: bool = Field(default=False, description="Whether to include detailed DDL information")
-) -> Dict[str, Any]:
+) -> str:
     """Get the main cluster (union of top N most important clusters) without duplicates.
     
     Args:
@@ -317,7 +319,7 @@ def get_main_cluster(
 def find_path(
     tables: str = Field(description="Comma-separated list of tables to find connections between"),
     max_hops: int = Field(default=3, description="Maximum relationship hops to explore")
-) -> Dict[str, Any]:
+) -> str:
     """Find all connection paths between the given tables.
     
     Args:
@@ -368,7 +370,7 @@ def suggest_joins(
     max_suggestions: int = Field(default=5, description="Maximum number of suggestions to return"),
     max_hops: int = Field(default=1, description="Maximum relationship hops to explore (1=direct, 2=two-hop, etc.)"),
     per_table: bool = Field(default=False, description="If True, return suggestions organized per base table; if False, return combined results")
-) -> Dict[str, Any]:
+) -> str:
     """Suggest additional tables that could be joined with the given base tables.
     
     Args:
@@ -472,7 +474,7 @@ def explore_view(
 @mcp.tool(description="Find database views related to specific tables for statistics and reporting queries")
 def find_related_views(
     table_names: str = Field(description="Comma-separated list of table names to find related views for")
-) -> Dict[str, Any]:
+) -> str:
     """Find database views related to specific tables for statistics and reporting queries.
     
     Args:
