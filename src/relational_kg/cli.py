@@ -26,7 +26,8 @@ class CategorizedGroup(click.Group):
             'Clustering': ['create-clusters', 'list-clusters', 'show-cluster', 'get-main-cluster'],
             'Table Exploration': ['explore-table', 'find-path', 'suggest-joins'],
             'View Exploration': ['explore-view', 'find-related-views'],
-            'LLM Integration': ['llm-keyword-extraction']
+            'LLM Integration': ['llm-keyword-extraction'],
+            'Server': ['start-server']
         }
         
         # Get all commands
@@ -986,6 +987,57 @@ def find_related_views(connection: str, tables: str, neo4j_uri: str, neo4j_user:
         
     except Exception as e:
         click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.option('--host', default='0.0.0.0', help='Host to bind the server to (default: 0.0.0.0)')
+@click.option('--port', default=8000, help='Port to run the server on (default: 8000)')
+@click.option('--neo4j-uri', help='Neo4j URI (overrides NEO4J_URI env var)')
+@click.option('--neo4j-user', help='Neo4j username (overrides NEO4J_USER env var)')
+@click.option('--neo4j-password', help='Neo4j password (overrides NEO4J_PASSWORD env var)')
+def start_server(host: str, port: int, neo4j_uri: str, neo4j_user: str, neo4j_password: str) -> None:
+    """Start the REST API server for fast access to knowledge graph tools."""
+    try:
+        # Set Neo4j environment variables if provided
+        if neo4j_uri:
+            os.environ['NEO4J_URI'] = neo4j_uri
+        if neo4j_user:
+            os.environ['NEO4J_USER'] = neo4j_user
+        if neo4j_password:
+            os.environ['NEO4J_PASSWORD'] = neo4j_password
+        
+        # Check that Neo4j password is available
+        if not os.getenv('NEO4J_PASSWORD'):
+            neo4j_password = click.prompt("Neo4j password", hide_input=True)
+            os.environ['NEO4J_PASSWORD'] = neo4j_password
+        
+        click.echo(f"🚀 Starting REST API server on http://{host}:{port}")
+        click.echo("📋 Available endpoints:")
+        click.echo(f"  • GET http://{host}:{port}/explore-table/{{table_names}} - Get table DDL")
+        click.echo(f"  • GET http://{host}:{port}/clusters - List all clusters")
+        click.echo(f"  • GET http://{host}:{port}/cluster/{{cluster_id}} - Get cluster info")
+        click.echo(f"  • GET http://{host}:{port}/main-cluster - Get main cluster")
+        click.echo(f"  • GET http://{host}:{port}/find-path/{{table_names}} - Find table connections")
+        click.echo("\\n🔗 Example usage:")
+        click.echo(f"  curl http://{host}:{port}/explore-table/users,orders")
+        click.echo(f"  curl http://{host}:{port}/main-cluster?detailed=true")
+        click.echo("\\n💡 Press Ctrl+C to stop the server\\n")
+        
+        # Import and run the FastAPI server
+        try:
+            import uvicorn
+        except ImportError:
+            click.echo("❌ Error: uvicorn not installed. Install with: pip install uvicorn", err=True)
+            sys.exit(1)
+        
+        from .api_server import app
+        uvicorn.run(app, host=host, port=port)
+        
+    except KeyboardInterrupt:
+        click.echo("\\n👋 Server stopped")
+    except Exception as e:
+        click.echo(f"❌ Error starting server: {e}", err=True)
         sys.exit(1)
 
 
