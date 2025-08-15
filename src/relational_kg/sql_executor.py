@@ -6,7 +6,6 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
-import tiktoken
 
 logger = logging.getLogger(__name__)
 
@@ -31,18 +30,11 @@ class SafeSqlExecutor:
         
         Args:
             connection_string: Database connection string
-            max_tokens: Maximum tokens before truncating results
+            max_tokens: Maximum tokens before truncating results (estimated as chars/4)
         """
         self.connection_string = connection_string
         self.max_tokens = max_tokens
         self.engine = None
-        
-        # Initialize tokenizer for counting tokens
-        try:
-            self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
-        except Exception:
-            # Fallback tokenizer if model-specific one fails
-            self.tokenizer = tiktoken.get_encoding("cl100k_base")
     
     def _connect(self):
         """Create database connection if not exists."""
@@ -114,7 +106,7 @@ class SafeSqlExecutor:
         result_lines.append("-" * len(header))
         
         # Add data rows
-        total_tokens = 0
+        total_chars = len(header) + len("-" * len(header))  # Count header chars
         truncated = False
         
         for row in rows:
@@ -134,15 +126,17 @@ class SafeSqlExecutor:
             
             row_text = " | ".join(row_values)
             
-            # Check token count
-            row_tokens = len(self.tokenizer.encode(row_text))
-            if total_tokens + row_tokens > self.max_tokens:
+            # Check token count (estimate: chars / 4)
+            row_chars = len(row_text)
+            estimated_tokens = (total_chars + row_chars) // 4
+            
+            if estimated_tokens > self.max_tokens:
                 result_lines.append(f"... (truncated at {len(result_lines)-2} rows due to token limit)")
                 truncated = True
                 break
             
             result_lines.append(row_text)
-            total_tokens += row_tokens
+            total_chars += row_chars
         
         result_text = "\n".join(result_lines)
         
