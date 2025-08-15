@@ -11,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 MCP_AVAILABLE = True
 
 from .analyzer import SchemaAnalyzer
+from .sql_executor import create_sql_executor
 
 # Load environment variables
 load_dotenv()
@@ -540,6 +541,42 @@ def find_related_views(
     except Exception as e:
         logger.error(f"Error in find_related_views: {e}")
         return f"Error: {str(e)}. Make sure Neo4j is running and the knowledge graph has been built"
+
+
+@mcp.tool(description="Execute SQL query safely with read-only validation and result truncation")
+def execute_sql(
+    sql: str = Field(description="SQL query to execute (read-only operations only)")
+) -> str:
+    """Execute SQL query safely with validation and result truncation.
+    
+    Args:
+        sql: SQL query to execute (SELECT, EXPLAIN, SHOW, etc.)
+        
+    Returns:
+        Formatted query results or error message
+    """
+    try:
+        # Get database connection string from environment
+        connection_string = os.getenv('DATABASE_URL')
+        if not connection_string:
+            return "Error: DATABASE_URL environment variable not set"
+        
+        # Get max tokens from environment (default 10000)
+        max_tokens = int(os.getenv('SQL_MAX_TOKENS', '10000'))
+        
+        logger.info(f"Executing SQL query: {sql[:100]}..." if len(sql) > 100 else f"Executing SQL query: {sql}")
+        
+        # Create SQL executor and execute query
+        executor = create_sql_executor(connection_string, max_tokens=max_tokens)
+        try:
+            result = executor.execute_query(sql)
+            return result
+        finally:
+            executor.close()
+            
+    except Exception as e:
+        logger.error(f"Error in execute_sql: {e}")
+        return f"Error: {str(e)}"
 
 
 if __name__ == "__main__":
