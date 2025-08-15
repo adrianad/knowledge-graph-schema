@@ -82,14 +82,14 @@ def explore_table(
         found_tables = [t for t in tables_ddl if not t.get('not_found', False)]
         missing_tables = [t['name'] for t in tables_ddl if t.get('not_found', False)]
         
-        # Format DDL output
+        # Format DDL output - one table per line, no newlines within DDL
         ddl_statements = []
         for table in found_tables:
-            ddl_statements.append(f"-- {table['name']}")
-            ddl_statements.append(table['ddl'])
-            ddl_statements.append("")  # Empty line between tables
+            # Replace newlines within DDL with spaces
+            clean_ddl = table['ddl'].replace('\n', ' ')
+            ddl_statements.append(f"-- {table['name']} {clean_ddl}")
         
-        result_text = "\n".join(ddl_statements).strip()
+        result_text = "\n".join(ddl_statements)
         
         if missing_tables:
             if result_text:
@@ -149,25 +149,15 @@ def list_clusters(
                 
                 clusters = remaining_clusters
         
-        result = {
-            "success": True,
-            "cluster_count": len(clusters),
-            "clusters": clusters
-        }
-        
         if not clusters:
-            result["info"] = "No clusters found. Run 'rkg create-clusters' to generate clusters first."
+            return {"info": "No clusters found. Run 'rkg create-clusters' to generate clusters first."}
         
         analyzer.close()
-        return result
+        return clusters
         
     except Exception as e:
         logger.error(f"Error in list_clusters: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "help": "Make sure Neo4j is running and clusters have been created with 'rkg create-clusters'"
-        }
+        return f"Error: {str(e)}. Make sure Neo4j is running and clusters have been created with 'rkg create-clusters'"
 
 
 @mcp.tool(description="Show detailed information about a specific cluster")
@@ -203,11 +193,7 @@ def show_cluster(
                 break
         
         if not cluster_info:
-            return {"result": {
-                "success": False,
-                "error": f"Cluster '{cluster_id}' not found",
-                "help": "Use list_clusters to see available cluster IDs"
-            }}
+            return f"Error: Cluster '{cluster_id}' not found. Use list_clusters to see available cluster IDs"
         
         # Get table names from cluster
         cluster_tables = cluster_info.get('tables', [])
@@ -228,18 +214,6 @@ def show_cluster(
             cluster_tables = [table for table in cluster_tables 
                             if table not in main_cluster_tables]
         
-        result = {
-            "success": True,
-            "cluster_id": cluster_id,
-            "tables": cluster_tables
-        }
-        
-        # Add cluster metadata
-        result["cluster_name"] = cluster_info.get('name', '')
-        result["cluster_description"] = cluster_info.get('description', '')
-        result["cluster_keywords"] = cluster_info.get('keywords', [])
-        
-        # Include DDL only if detailed=True
         if detailed:
             # Get cluster table DDL from Neo4j
             tables_ddl = analyzer.backend.get_cluster_tables_ddl(cluster_id)
@@ -248,25 +222,23 @@ def show_cluster(
             filtered_ddl = [table for table in tables_ddl 
                           if table['name'] in cluster_tables]
             
-            # Format DDL output
+            # Return just DDL - one table per line, no newlines within DDL
             ddl_statements = []
             for table in filtered_ddl:
-                ddl_statements.append(f"-- {table['name']}")
-                ddl_statements.append(table['ddl'])
-                ddl_statements.append("")  # Empty line between tables
+                clean_ddl = table['ddl'].replace('\n', ' ')
+                ddl_statements.append(f"-- {table['name']} {clean_ddl}")
             
-            result["ddl"] = "\n".join(ddl_statements).strip()
+            result_text = "\n".join(ddl_statements)
+        else:
+            # Return comma-separated table names
+            result_text = ", ".join(cluster_tables)
         
         analyzer.close()
-        return {"result": result}
+        return result_text
         
     except Exception as e:
         logger.error(f"Error in show_cluster: {e}")
-        return {"result": {
-            "success": False,
-            "error": str(e),
-            "help": "Make sure Neo4j is running and the cluster exists"
-        }}
+        return f"Error: {str(e)}. Make sure Neo4j is running and the cluster exists"
 
 
 @mcp.tool(description="Get the main cluster (union of top N most important clusters) without duplicates")
@@ -293,11 +265,7 @@ def get_main_cluster(
         clusters = analyzer.backend.get_all_clusters()
         
         if not clusters:
-            return {
-                "success": False,
-                "error": "No clusters found in the database",
-                "help": "Use 'rkg create-clusters' to generate clusters first"
-            }
+            return "Error: No clusters found in the database. Use 'rkg create-clusters' to generate clusters first"
         
         if len(clusters) < main_cluster_size:
             logger.warning(f"Only {len(clusters)} clusters available, using all of them")
@@ -324,36 +292,24 @@ def get_main_cluster(
             # Get DDL for all tables
             tables_ddl = analyzer.backend.get_table_ddl(main_cluster_tables)
             
-            # Format DDL output
+            # Format DDL output - one table per line, no newlines within DDL
             ddl_statements = []
             for table in tables_ddl:
                 if not table.get('not_found', False):
-                    ddl_statements.append(f"-- {table['name']}")
-                    ddl_statements.append(table['ddl'])
-                    ddl_statements.append("")  # Empty line between tables
+                    clean_ddl = table['ddl'].replace('\n', ' ')
+                    ddl_statements.append(f"-- {table['name']} {clean_ddl}")
             
-            result_ddl = "\n".join(ddl_statements).strip()
+            result_text = "\n".join(ddl_statements)
         else:
-            result_ddl = None
-        
-        result = {
-            "success": True,
-            "tables": main_cluster_tables
-        }
-        
-        if detailed:
-            result["ddl"] = result_ddl
+            # Return comma-separated table names
+            result_text = ", ".join(main_cluster_tables)
         
         analyzer.close()
-        return result
+        return result_text
         
     except Exception as e:
         logger.error(f"Error in get_main_cluster: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "help": "Make sure Neo4j is running and clusters have been created"
-        }
+        return f"Error: {str(e)}. Make sure Neo4j is running and clusters have been created"
 
 
 @mcp.tool(description="Find all connection paths between the given tables")
@@ -381,11 +337,7 @@ def find_path(
                 table_list.append(name)
         
         if len(table_list) < 2:
-            return {
-                "success": False,
-                "error": "At least 2 tables are required to find connections",
-                "help": "Provide comma-separated table names like 'user_,sample,booking'"
-            }
+            return "Error: At least 2 tables are required to find connections. Provide comma-separated table names like 'user_,sample,booking'"
         
         logger.info(f"Finding connections between tables: {table_list} (max_hops: {max_hops})")
         
@@ -393,38 +345,20 @@ def find_path(
         connections = analyzer.backend.find_all_connections(table_list, max_hops)
         
         if not connections:
-            return {
-                "success": True,
-                "connections": [],
-                "message": f"No connections found between these tables within {max_hops} hops"
-            }
+            return f"No connections found between these tables within {max_hops} hops"
         
-        # Format connections with readable paths (simplified)
-        formatted_connections = []
+        # Format connections as simple path strings
+        path_strings = []
         for conn in connections:
             path_str = " - ".join(conn['path'])
-            formatted_connections.append({
-                "table1": conn['table1'],
-                "table2": conn['table2'],
-                "path": conn['path'],
-                "path_string": path_str
-            })
-        
-        result = {
-            "success": True,
-            "connections": formatted_connections
-        }
+            path_strings.append(path_str)
         
         analyzer.close()
-        return result
+        return "\n".join(path_strings)
         
     except Exception as e:
         logger.error(f"Error in find_path: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "help": "Make sure Neo4j is running and the knowledge graph has been built"
-        }
+        return f"Error: {str(e)}. Make sure Neo4j is running and the knowledge graph has been built"
 
 
 @mcp.tool(description="Suggest additional tables that could be joined with the given base tables")
@@ -456,113 +390,23 @@ def suggest_joins(
                 table_list.append(name)
         
         if not table_list:
-            return {
-                "success": False,
-                "error": "No base tables provided",
-                "help": "Provide comma-separated table names like 'user_,booking'"
-            }
+            return "Error: No base tables provided. Provide comma-separated table names like 'user_,booking'"
         
         logger.info(f"Getting join suggestions for tables: {table_list} (max_hops: {max_hops}, per_table: {per_table})")
         
-        if per_table:
-            # Per-table suggestions
-            suggestions_per_table = analyzer.suggest_tables_for_join(table_list, max_suggestions, max_hops)
-            
-            # Format with connection paths
-            formatted_suggestions = {}
-            for base_table, suggestions in suggestions_per_table.items():
-                formatted_suggestions[base_table] = []
-                for suggested_table in suggestions:
-                    # Find connection path
-                    path = analyzer.find_connection_path(base_table, suggested_table, max_hops)
-                    if path:
-                        distance = len(path) - 1
-                        distance_desc = "direct" if distance == 1 else f"{distance}-hop"
-                        path_str = " - ".join(path)
-                    else:
-                        distance = None
-                        distance_desc = "unknown"
-                        path_str = f"{base_table} - {suggested_table}"
-                    
-                    formatted_suggestions[base_table].append({
-                        "table": suggested_table,
-                        "path": path,
-                        "path_string": path_str,
-                        "distance": distance,
-                        "distance_description": distance_desc
-                    })
-            
-            result = {
-                "success": True,
-                "mode": "per_table",
-                "base_tables": table_list,
-                "max_suggestions": max_suggestions,
-                "max_hops": max_hops,
-                "suggestions_per_table": formatted_suggestions,
-                "total_unique_suggestions": len(set(
-                    suggestion["table"] 
-                    for suggestions in formatted_suggestions.values() 
-                    for suggestion in suggestions
-                ))
-            }
-        else:
-            # Combined suggestions
-            suggestions = analyzer.suggest_tables_for_join_combined(table_list, max_suggestions, max_hops)
-            
-            if not suggestions:
-                return {
-                    "success": True,
-                    "mode": "combined",
-                    "base_tables": table_list,
-                    "suggestions": [],
-                    "message": f"No join suggestions found within {max_hops} hops"
-                }
-            
-            # Format with connection paths from each base table
-            formatted_suggestions = []
-            for suggested_table in suggestions:
-                suggestion_entry = {
-                    "table": suggested_table,
-                    "paths": []
-                }
-                
-                # Find paths from each base table
-                for base_table in table_list:
-                    path = analyzer.find_connection_path(base_table, suggested_table, max_hops)
-                    if path and len(path) > 1:
-                        distance = len(path) - 1
-                        distance_desc = "direct" if distance == 1 else f"{distance}-hop"
-                        path_str = " - ".join(path)
-                        suggestion_entry["paths"].append({
-                            "from_table": base_table,
-                            "path": path,
-                            "path_string": path_str,
-                            "distance": distance,
-                            "distance_description": distance_desc
-                        })
-                
-                formatted_suggestions.append(suggestion_entry)
-            
-            result = {
-                "success": True,
-                "mode": "combined",
-                "base_tables": table_list,
-                "max_suggestions": max_suggestions,
-                "max_hops": max_hops,
-                "suggestions": formatted_suggestions,
-                "total_suggestions": len(formatted_suggestions)
-            }
+        # Get suggestions - use combined mode for simplicity
+        suggestions = analyzer.suggest_tables_for_join_combined(table_list, max_suggestions, max_hops)
         
+        if not suggestions:
+            return f"No join suggestions found within {max_hops} hops"
+        
+        # Return just comma-separated suggested table names
         analyzer.close()
-        return result
+        return ", ".join(suggestions)
         
     except Exception as e:
         logger.error(f"Error in suggest_joins: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "help": "Make sure Neo4j is running and the knowledge graph has been built"
-        }
+        return f"Error: {str(e)}. Make sure Neo4j is running and the knowledge graph has been built"
 
 
 @mcp.tool(description="Get detailed information about specific database views for statistics and reporting")
@@ -598,38 +442,30 @@ def explore_view(
         missing_views = [table['name'] for table in tables_ddl if table.get('not_found', False)]
         non_views = [table['name'] for table in tables_ddl if not table.get('is_view', False) and not table.get('not_found', False)]
         
-        # Format DDL output
+        # Format DDL output - one view per line, no newlines within DDL
         ddl_statements = []
         for view in view_ddl:
-            ddl_statements.append(f"-- {view['name']} (VIEW)")
-            ddl_statements.append(view['ddl'])
-            ddl_statements.append("")  # Empty line between views
+            clean_ddl = view['ddl'].replace('\n', ' ')
+            ddl_statements.append(f"-- {view['name']} {clean_ddl}")
         
-        result = {
-            "success": True,
-            "views_requested": len(view_list),
-            "views_found": len(view_ddl),
-            "ddl": "\n".join(ddl_statements).strip()
-        }
+        result_text = "\n".join(ddl_statements)
         
         if missing_views:
-            result["missing_views"] = missing_views
-            result["warning"] = f"Views not found in Neo4j: {', '.join(missing_views)}"
+            if result_text:
+                result_text += f"\n\nWarning: Views not found in Neo4j: {', '.join(missing_views)}"
+            else:
+                result_text = f"Error: Views not found in Neo4j: {', '.join(missing_views)}\nMake sure Neo4j is running and the knowledge graph has been built with 'rkg analyze'"
         
         if non_views:
-            result["non_views"] = non_views
-            result["info"] = f"These are tables, not views: {', '.join(non_views)}. Use explore_table() instead."
+            if result_text:
+                result_text += f"\n\nInfo: These are tables, not views: {', '.join(non_views)}. Use explore_table() instead."
         
         analyzer.close()
-        return {"result": result}
+        return result_text
         
     except Exception as e:
         logger.error(f"Error in explore_view: {e}")
-        return {"result": {
-            "success": False,
-            "error": str(e),
-            "help": "Make sure Neo4j is running and the knowledge graph has been built with 'rkg analyze'"
-        }}
+        return f"Error: {str(e)}\nMake sure Neo4j is running and the knowledge graph has been built with 'rkg analyze'"
 
 
 @mcp.tool(description="Find database views related to specific tables for statistics and reporting queries")
@@ -655,11 +491,7 @@ def find_related_views(
                 table_list.append(name)
         
         if not table_list:
-            return {
-                "success": False,
-                "error": "No table names provided",
-                "help": "Provide comma-separated table names like 'user_,booking'"
-            }
+            return "Error: No table names provided. Provide comma-separated table names like 'user_,booking'"
         
         logger.info(f"Finding related views for tables: {table_list}")
         
@@ -699,29 +531,15 @@ def find_related_views(
         )
         
         if not sorted_views:
-            return {
-                "success": True,
-                "related_views": [],
-                "message": f"No views found related to tables: {', '.join(table_list)}"
-            }
+            return f"No views found related to tables: {', '.join(table_list)}"
         
-        result = {
-            "success": True,
-            "base_tables": table_list,
-            "related_views": sorted_views,
-            "total_found": len(sorted_views)
-        }
-        
+        # Return comma-separated view names
         analyzer.close()
-        return result
+        return ", ".join(sorted_views)
         
     except Exception as e:
         logger.error(f"Error in find_related_views: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "help": "Make sure Neo4j is running and the knowledge graph has been built"
-        }
+        return f"Error: {str(e)}. Make sure Neo4j is running and the knowledge graph has been built"
 
 
 if __name__ == "__main__":
