@@ -415,7 +415,7 @@ def suggest_joins(
 @mcp.tool(description="Get detailed information about specific database views for statistics and reporting")
 def explore_view(
     view_names: str = Field(description="Comma-separated list of view names to explore")
-) -> Dict[str, Any]:
+) -> str:
     """Get detailed information about specific database views for statistics and reporting.
     
     Args:
@@ -435,7 +435,7 @@ def explore_view(
                 view_list.append(name)
         
         if not view_list:
-            return {"error": "No view names provided"}
+            return "Error: No view names provided"
         
         logger.info(f"Getting DDL for views: {view_list}")
         
