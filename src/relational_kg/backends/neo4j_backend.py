@@ -379,6 +379,46 @@ class Neo4jBackend(GraphBackend):
             filtered_connections = self._filter_subpaths(connections)
             return filtered_connections
     
+    def find_multiple_connections(self, tables: List[str], exact_hops: int) -> List[Dict[str, Any]]:
+        """Find all connections between any pair of tables at exactly the specified hop distance.
+        
+        Returns list of connection info with table1, table2, path, and distance.
+        """
+        if len(tables) < 2:
+            return []
+            
+        with self.driver.session() as session:
+            result = session.run("""
+                UNWIND $tables AS table1
+                UNWIND $tables AS table2  
+                WITH table1, table2 
+                WHERE table1 < table2  // Avoid duplicates and self-connections
+                
+                MATCH (t1 {name: table1}), (t2 {name: table2})
+                WHERE t1 <> t2  // Extra safety: ensure different nodes
+                
+                MATCH path = (t1)-[*%d]-(t2)
+                WHERE path IS NOT NULL
+                
+                WITH table1, table2, 
+                     [n in nodes(path) | n.name] as path_nodes,
+                     length(path) as distance
+                ORDER BY table1, table2, path_nodes
+                
+                RETURN table1, table2, path_nodes, distance
+            """ % exact_hops, tables=tables)
+            
+            connections = []
+            for record in result:
+                connections.append({
+                    'table1': record['table1'],
+                    'table2': record['table2'],
+                    'path': record['path_nodes'],
+                    'distance': record['distance']
+                })
+            
+            return connections
+    
     def _filter_subpaths(self, connections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Remove any path that appears as a contiguous subsequence within a longer path."""
         if not connections:

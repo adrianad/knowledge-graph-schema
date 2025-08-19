@@ -317,20 +317,21 @@ def get_main_cluster(
 
 @mcp.tool(description="Find all connection paths between the given tables")
 def find_path(
-    tables: str = Field(description="Comma-separated list of tables to find connections between"),
-    max_hops: int = Field(default=3, description="Maximum relationship hops to explore")
+    tables: str = Field(description="Comma-separated list of tables to find connections between")
 ) -> str:
     """Find all connection paths between the given tables.
     
     Args:
         tables: Comma-separated list of tables to find connections between
-        max_hops: Maximum relationship hops to explore (default: 3)
         
     Returns:
-        Dictionary containing all connection paths organized by hop distance
+        All connection paths organized by hop distance
     """
     try:
         analyzer = _get_analyzer()
+        
+        # Get max_hops from environment
+        max_hops = int(os.getenv('MAX_HOPS', '3'))
         
         # Parse table names
         table_list = []
@@ -344,20 +345,30 @@ def find_path(
         
         logger.info(f"Finding connections between tables: {table_list} (max_hops: {max_hops})")
         
-        # Find all connections
-        connections = analyzer.backend.find_all_connections(table_list, max_hops)
+        # Find paths for each hop distance
+        result_lines = []
+        total_paths = 0
         
-        if not connections:
-            return f"No connections found between these tables within {max_hops} hops"
-        
-        # Format connections as simple path strings
-        path_strings = []
-        for conn in connections:
-            path_str = " - ".join(conn['path'])
-            path_strings.append(path_str)
+        for hops in range(1, max_hops + 1):
+            connections = analyzer.backend.find_multiple_connections(table_list, hops)
+            
+            if connections:
+                result_lines.append(f"=== {hops}-hop paths ===")
+                hop_paths = []
+                for conn in connections:
+                    path_str = " - ".join(conn['path'])
+                    hop_paths.append(path_str)
+                
+                result_lines.extend(hop_paths)
+                result_lines.append("")  # Empty line between hop sections
+                total_paths += len(hop_paths)
         
         analyzer.close()
-        return "\n".join(path_strings)
+        
+        if total_paths == 0:
+            return f"No connections found between these tables within {max_hops} hops"
+        
+        return "\n".join(result_lines).strip()
         
     except Exception as e:
         logger.error(f"Error in find_path: {e}")
