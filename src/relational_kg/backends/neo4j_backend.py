@@ -400,12 +400,13 @@ class Neo4jBackend(GraphBackend):
                 MATCH path = (t1)-[*%d]-(t2)
                 WHERE path IS NOT NULL
                 
-                WITH table1, table2, 
+                WITH DISTINCT table1, table2, 
                      [n in nodes(path) | n.name] as path_nodes,
                      length(path) as distance
                 ORDER BY table1, table2, path_nodes
                 
                 RETURN table1, table2, path_nodes, distance
+                LIMIT 20
             """ % exact_hops, tables=tables)
             
             connections = []
