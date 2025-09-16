@@ -201,3 +201,5 @@ neo4j_plugins/
 # Local configuration files
 config.local.yml
 .env.local
+manual_timeout_test.py
+test_sql_executor_timeout.py
