@@ -172,6 +172,9 @@ OPENAI_API_BASE=http://localhost:8000/v1  # Local LLM server
 OPENAI_API_KEY=dummy-key
 LLM_MODEL=qwen
 LLM_MAX_CONCURRENT=5
+
+# SQL execution timeout (default: 5000ms)
+SQL_STATEMENT_TIMEOUT_MS=5000
 ```
 
 ## Architecture

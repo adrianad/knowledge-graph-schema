@@ -5,7 +5,7 @@ import re
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +35,24 @@ class SafeSqlExecutor:
         self.connection_string = connection_string
         self.max_tokens = max_tokens
         self.engine = None
+        # Read timeout from environment variable (default: 5000ms)
+        self.timeout_ms = int(os.getenv('SQL_STATEMENT_TIMEOUT_MS', '5000'))
     
     def _connect(self):
         """Create database connection if not exists."""
         if not self.engine:
             try:
-                self.engine = create_engine(self.connection_string)
-                logger.info("Database connection established")
+                # For PostgreSQL, add statement_timeout to connection parameters
+                if 'postgresql' in self.connection_string.lower():
+                    # Parse connection string and add timeout parameter
+                    connect_args = {
+                        'options': f'-c statement_timeout={self.timeout_ms}ms'
+                    }
+                    self.engine = create_engine(self.connection_string, connect_args=connect_args)
+                else:
+                    # For other databases, create engine without timeout setting
+                    self.engine = create_engine(self.connection_string)
+                logger.info(f"Database connection established with timeout: {self.timeout_ms}ms")
             except Exception as e:
                 logger.error(f"Failed to connect to database: {e}")
                 raise
@@ -166,35 +177,36 @@ class SafeSqlExecutor:
             # Connect to database
             self._connect()
             
-            # Execute query in read-only transaction
+            # Execute read-only query directly (no transaction needed)
             with self.engine.connect() as conn:
-                # Start read-only transaction for additional safety
-                with conn.begin() as trans:
-                    try:
-                        # Execute query
-                        result = conn.execute(text(sql))
-                        
-                        # Fetch results
-                        if result.returns_rows:
-                            rows = result.fetchall()
-                            columns = list(result.keys())
-                            return self._format_results(rows, columns)
-                        else:
-                            # For queries that don't return rows (like EXPLAIN)
-                            return "Query executed successfully (no rows returned)"
-                            
-                    except Exception as e:
-                        trans.rollback()
-                        raise e
+                # Execute query directly since it's read-only
+                result = conn.execute(text(sql))
+                
+                # Fetch results
+                if result.returns_rows:
+                    rows = result.fetchall()
+                    columns = list(result.keys())
+                    return self._format_results(rows, columns)
+                else:
+                    # For queries that don't return rows (like EXPLAIN)
+                    return "Query executed successfully (no rows returned)"
                         
         except SQLAlchemyError as e:
             logger.error(f"Database error: {e}")
+            # Check if this is a timeout error
+            error_str = str(e).lower()
+            if 'timeout' in error_str or 'canceling statement due to statement timeout' in error_str:
+                return "Query takes too long and was aborted."
             return f"Database error: {str(e)}"
         except ValueError as e:
             logger.error(f"SQL validation error: {e}")
             return f"SQL validation error: {str(e)}"
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
+            # Check if this is a timeout error from other sources
+            error_str = str(e).lower()
+            if 'timeout' in error_str:
+                return "Query takes too long and was aborted."
             return f"Error: {str(e)}"
     
     def close(self):
