@@ -177,26 +177,19 @@ class SafeSqlExecutor:
             # Connect to database
             self._connect()
             
-            # Execute query in read-only transaction
+            # Execute read-only query directly (no transaction needed)
             with self.engine.connect() as conn:
-                # Start read-only transaction for additional safety
-                with conn.begin() as trans:
-                    try:
-                        # Execute query
-                        result = conn.execute(text(sql))
-                        
-                        # Fetch results
-                        if result.returns_rows:
-                            rows = result.fetchall()
-                            columns = list(result.keys())
-                            return self._format_results(rows, columns)
-                        else:
-                            # For queries that don't return rows (like EXPLAIN)
-                            return "Query executed successfully (no rows returned)"
-                            
-                    except Exception as e:
-                        trans.rollback()
-                        raise e
+                # Execute query directly since it's read-only
+                result = conn.execute(text(sql))
+                
+                # Fetch results
+                if result.returns_rows:
+                    rows = result.fetchall()
+                    columns = list(result.keys())
+                    return self._format_results(rows, columns)
+                else:
+                    # For queries that don't return rows (like EXPLAIN)
+                    return "Query executed successfully (no rows returned)"
                         
         except SQLAlchemyError as e:
             logger.error(f"Database error: {e}")
