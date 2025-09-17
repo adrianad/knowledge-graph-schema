@@ -49,7 +49,7 @@ def _get_analyzer() -> SchemaAnalyzer:
     return analyzer
 
 
-@mcp.tool(description="Get detailed information about specific tables from Neo4j graph")
+@mcp.tool(description="Retrieves complete DDL (Data Definition Language) statements for specified database tables from the Neo4j knowledge graph. Returns table schemas including columns, data types, and constraints. Use when you need to understand table structure for SQL query generation.")
 def explore_table(
     table_names: str = Field(description="Comma-separated list of table names to explore")
 ) -> str:
@@ -106,7 +106,7 @@ def explore_table(
         return f"Error: {str(e)}\nMake sure Neo4j is running and the knowledge graph has been built with 'rkg analyze'"
 
 
-@mcp.tool(description="List all available table clusters from Neo4j")
+@mcp.tool(description="Lists all available table clusters created by the clustering algorithm, returning cluster IDs as comma-separated values. Clusters group related tables based on relationship patterns or business domains. Optionally excludes main cluster tables to focus on specialized domains.")
 def list_clusters(
     exclude_main: bool = Field(default=True, description="Whether to exclude the clusters that make up the main cluster")
 ) -> str:
@@ -163,7 +163,7 @@ def list_clusters(
         return f"Error: {str(e)}. Make sure Neo4j is running and clusters have been created with 'rkg create-clusters'"
 
 
-@mcp.tool(description="Show detailed information about a specific cluster")
+@mcp.tool(description="Retrieves detailed information about a specific table cluster, including table names and optionally their full DDL schemas. Clusters group logically related tables for focused schema analysis. Use to get schema subset for specific business domains or functional areas.")
 def show_cluster(
     cluster_id: str = Field(description="The cluster ID to show details for"),
     detailed: bool = Field(default=False, description="Whether to include detailed column information for tables"),
@@ -244,7 +244,7 @@ def show_cluster(
         return f"Error: {str(e)}. Make sure Neo4j is running and the cluster exists"
 
 
-@mcp.tool(description="Get the main cluster (union of top N most important clusters) without duplicates")
+@mcp.tool(description="Retrieves the main cluster containing the most important and interconnected tables from the database schema. Combines the top N most significant table clusters into a unified schema subset. Use this for general database queries when you need the core business entities.")
 def get_main_cluster(
     detailed: bool = Field(default=False, description="Whether to include detailed DDL information")
 ) -> str:
@@ -315,7 +315,7 @@ def get_main_cluster(
         return f"Error: {str(e)}. Make sure Neo4j is running and clusters have been created"
 
 
-@mcp.tool(description="Find all connection paths between the given tables")
+@mcp.tool(description="Discovers all possible connection paths between specified tables through foreign key relationships, organized by hop distance (1-hop = direct, 2-hop = through one intermediate table, etc.). Returns relationship chains up to 3 hops by default. Use to understand how tables can be joined in SQL queries.")
 def find_path(
     tables: str = Field(description="Comma-separated list of tables to find connections between")
 ) -> str:
@@ -375,7 +375,7 @@ def find_path(
         return f"Error: {str(e)}. Make sure Neo4j is running and the knowledge graph has been built"
 
 
-@mcp.tool(description="Suggest additional tables that could be joined with the given base tables")
+@mcp.tool(description="Identifies additional tables that can be joined with specified base tables, ranked by importance scores (PageRank + degree centrality). Explores relationships up to specified hop distance and returns top suggestions. Use to expand query scope and discover relevant related tables for complex SQL queries.")
 def suggest_joins(
     base_tables: str = Field(description="Comma-separated list of base tables to suggest joins for"),
     max_suggestions: int = Field(default=5, description="Maximum number of suggestions to return"),
@@ -423,7 +423,7 @@ def suggest_joins(
         return f"Error: {str(e)}. Make sure Neo4j is running and the knowledge graph has been built"
 
 
-@mcp.tool(description="Get detailed information about specific database views for statistics and reporting")
+@mcp.tool(description="Retrieves complete DDL statements for specified database views, including view definitions and column schemas. Filters results to return only actual views (not tables). Use for understanding view structure when building reporting or analytical queries that leverage pre-defined views.")
 def explore_view(
     view_names: str = Field(description="Comma-separated list of view names to explore")
 ) -> str:
@@ -482,7 +482,7 @@ def explore_view(
         return f"Error: {str(e)}\nMake sure Neo4j is running and the knowledge graph has been built with 'rkg analyze'"
 
 
-@mcp.tool(description="Find database views related to specific tables for statistics and reporting queries")
+@mcp.tool(description="Discovers database views that depend on or are related to specified tables through view_dependency relationships and regular connections. Results are ranked by importance scores. Use to find pre-built views for reporting queries instead of writing complex table joins manually.")
 def find_related_views(
     table_names: str = Field(description="Comma-separated list of table names to find related views for")
 ) -> str:
@@ -556,7 +556,7 @@ def find_related_views(
         return f"Error: {str(e)}. Make sure Neo4j is running and the knowledge graph has been built"
 
 
-@mcp.tool(description="Execute SQL query safely with read-only validation and result truncation")
+@mcp.tool(description="Executes read-only SQL queries (SELECT, EXPLAIN, SHOW, DESCRIBE, WITH) with strict validation and automatic result truncation. Blocks write operations and multiple statements for safety. Results are limited to ~10,000 tokens to prevent overflow. Use for data exploration and query validation.")
 def execute_sql(
     sql: str = Field(description="SQL query to execute (read-only operations only)")
 ) -> str:
